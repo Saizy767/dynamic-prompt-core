@@ -43,3 +43,15 @@ startup_timeout = 60
 [llm.vllm]
 # gpu_memory_utilization = 0.9
 # tensor_parallel_size = 1
+
+# Dataset configuration for dataset.py (loader, split, artifact persistence).
+# asyncTask.py ignores this section; it only reads [llm].
+[dataset]
+# Path to the source dataset in jsonl or parquet format.
+# Use convert_csv_to_jsonl.py to produce this from data/train.csv.
+path = "data/train.jsonl"
+# Fixed seed for the reproducible dev/holdout split.
+seed = 42
+# Fraction of non-ambiguous records held out (holdout). Must be strictly
+# between 0 and 1.
+holdout_ratio = 0.2
