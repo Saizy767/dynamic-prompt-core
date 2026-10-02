@@ -71,3 +71,16 @@ language = "ru"
 prompt_version = "classify-v0"
 # Path to the prepared dataset artifact (from dataset-and-prompt).
 dataset_artifact = "data/prepared_42_20261002T092615Z.jsonl"
+
+# Stage 1 metrics configuration (metrics.py).
+# runner.py, asyncTask.py, and dataset.py ignore this section.
+[metrics]
+# Flag a prediction-distribution bias when the gap between predicted and true
+# class shares exceeds this threshold (fraction).
+bias_threshold = 0.15
+# Text-length group boundaries (word count): short < group_short_max,
+# medium group_short_max..group_long_min, long > group_long_min.
+group_short_max = 10
+group_long_min = 30
+# Directory for metrics artifacts.
+output_dir = "data/results"

@@ -9,6 +9,7 @@ persists a jsonl results artifact for the metrics and thesis-analysis stages.
 Usage:
     python runner.py --split dev
     python runner.py --split holdout --run-id myrun
+    python runner.py --split dev --duration 1000 --cycles 3
 """
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ from prompts import (
     PromptArtifact,
 )
 from schemas import ClassificationResult, ThesisExtraction
+
+import metrics as metrics_module
 
 log = logging.getLogger(__name__)
 
@@ -165,6 +168,7 @@ class BaselineRunner:
         split: str,
         run_id: Optional[str] = None,
         dataset_artifact: Optional[str] = None,
+        duration: Optional[int] = None,
     ) -> None:
         self._task = task
         self._config = config
@@ -181,6 +185,7 @@ class BaselineRunner:
         self._extract_prompt = EXTRACTION_PROMPT
 
         self._dataset_artifact = dataset_artifact or config.dataset_artifact
+        self._duration = duration
 
         self._semaphore: Optional[asyncio.Semaphore] = None
         self._ckpt_lock = asyncio.Lock()
@@ -394,6 +399,20 @@ class BaselineRunner:
         if not examples:
             raise ValueError(f"split '{self._split}' has no examples")
 
+        if self._duration is not None:
+            if self._duration <= 0:
+                raise ValueError(
+                    f"--duration must be a positive integer, got {self._duration}"
+                )
+            if self._duration > len(examples):
+                raise ValueError(
+                    f"--duration ({self._duration}) exceeds split '{self._split}' "
+                    f"size ({len(examples)})"
+                )
+            examples = examples[: self._duration]
+            print(f"Duration: processing {len(examples)} of "
+                  f"{len(getattr(dataset, self._split))} examples")
+
         processed_ids = self._load_checkpoint_ids()
         if processed_ids:
             print(f"Resuming: {len(processed_ids)} examples already in checkpoint, "
@@ -443,24 +462,46 @@ async def _main_async(args: argparse.Namespace) -> None:
 
     output_dir = config.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    log_path = os.path.join(output_dir, f"requests_{run_id}_{args.split}.jsonl")
 
-    task = AsyncTask(
-        config_path=args.config,
-        endpoint=args.endpoint,
-        log_path=log_path,
-        run_id=run_id,
-    )
+    cycles = args.cycles
+    for cycle in range(1, cycles + 1):
+        cycle_run_id = run_id if cycles == 1 else f"{run_id}-c{cycle}"
+        if cycles > 1:
+            print(f"\n{'='*60}")
+            print(f"Cycle {cycle}/{cycles}  (run_id={cycle_run_id})")
+            print(f"{'='*60}")
 
-    runner = BaselineRunner(
-        task=task,
-        config=config,
-        split=args.split,
-        run_id=run_id,
-        dataset_artifact=args.dataset_artifact,
-    )
+        log_path = os.path.join(output_dir, f"requests_{cycle_run_id}_{args.split}.jsonl")
 
-    await runner.run()
+        task = AsyncTask(
+            config_path=args.config,
+            endpoint=args.endpoint,
+            log_path=log_path,
+            run_id=cycle_run_id,
+        )
+
+        runner = BaselineRunner(
+            task=task,
+            config=config,
+            split=args.split,
+            run_id=cycle_run_id,
+            dataset_artifact=args.dataset_artifact,
+            duration=args.duration,
+        )
+
+        _, artifact_path = await runner.run()
+
+        # Auto-compute metrics from the cycle's results artifact
+        try:
+            rows = metrics_module.load_results(artifact_path)
+            m_config = metrics_module.MetricsConfig.from_config(args.config)
+            m = metrics_module.compute_metrics(rows, m_config, artifact_path)
+            metrics_path = metrics_module.write_metrics(m, m_config.output_dir)
+            print(f"\nMetrics artifact: {metrics_path}")
+            print(f"  accuracy={m['accuracy']:.4f}  macro-F1={m['f1']['macro']:.4f}"
+                  f"  minority-F1={m['f1']['minority']:.4f}  biased={m['bias']['biased']}")
+        except Exception as exc:
+            log.warning("Metrics computation failed for %s: %s", artifact_path, exc)
 
 
 def main() -> None:
@@ -475,6 +516,14 @@ def main() -> None:
     parser.add_argument(
         "--endpoint", default="http://127.0.0.1:8080/v1",
         help="LLM server endpoint",
+    )
+    parser.add_argument(
+        "--duration", type=int, default=None,
+        help="Number of examples from the split to process (must be <= split size)",
+    )
+    parser.add_argument(
+        "--cycles", type=int, default=1,
+        help="Number of passes over the selected examples (each cycle gets its own artifact)",
     )
     args = parser.parse_args()
     asyncio.run(_main_async(args))
