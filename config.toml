@@ -1,0 +1,45 @@
+# Configuration for the LLM server launcher and asyncTask.py client.
+# Both read this same [llm] section. The launcher uses the keys below to
+# start llama-server (or vllm); asyncTask.py reads model_path and
+# served_model_name to connect and send requests.
+
+[llm]
+# Backend to launch: "llamacpp" (llama-server) or "vllm".
+# vllm refuses to run on macOS (darwin) with a clear message; it is a
+# Linux GPU target.
+backend = "llamacpp"
+
+# Path to the model directory or Hugging Face repo id. asyncTask.py loads the
+# tokenizer from here (AutoTokenizer.from_pretrained). vLLM serves from here.
+model_path = "model"
+
+# Path to the GGUF file, used only by the llamacpp backend (llama-server -m).
+# Launcher-only key; asyncTask.py ignores it.
+gguf_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
+
+# Name the server presents via GET /v1/models and that asyncTask.py sends as
+# the "model" field in chat payloads. For llamacpp the launcher passes this as
+# --alias so the server reports it. These two MUST match or the server rejects
+# requests with a model-name mismatch.
+served_model_name = "qwen2.5-3b-instruct"
+
+# Network address the server binds.
+host = "127.0.0.1"
+port = 8080
+
+# Inference parameters passed to the backend.
+ctx_size = 4096      # llamacpp: -c (context window); vllm: --max-model-len
+gpu_layers = 0       # llamacpp: -ngl (layers in VRAM; 0 = CPU-only, -1 = all)
+threads = 4          # llamacpp: -t (CPU threads); vllm: ignored
+
+# Seconds to wait for GET /v1/models to return 200 before giving up.
+# llama-server is fast (~10s); vllm model load can take minutes.
+startup_timeout = 60
+
+# Optional backend-specific extra flags. Uncomment to use.
+[llm.llamacpp]
+# extra_args = []
+
+[llm.vllm]
+# gpu_memory_utilization = 0.9
+# tensor_parallel_size = 1
