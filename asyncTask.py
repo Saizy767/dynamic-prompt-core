@@ -94,6 +94,19 @@ class RawResponse:
     truncated: bool = False
 
 
+@dataclass
+class CallResult:
+    """Rich result bundling parsed model, raw content, latency, and parse status."""
+    parsed: Optional[BaseModel]
+    raw_content: Optional[str]
+    latency_ms: float
+    parse_status: Optional[ParseStatus]
+    status: ResponseStatus
+    finish_reason: Optional[str] = None
+    error: Optional[str] = None
+    truncated: bool = False
+
+
 def _strip_chat_suffix(endpoint: str) -> str:
     endpoint = endpoint.rstrip("/")
     suffix = "/chat/completions"
@@ -485,7 +498,7 @@ class AsyncTask:
     # ------------------------------------------------------------------ #
     #  Public API — parsing
     # ------------------------------------------------------------------ #
-    async def analyze(
+    async def _analyze_detailed(
         self,
         session: aiohttp.ClientSession,
         text: str,
@@ -496,7 +509,8 @@ class AsyncTask:
         max_tokens: Optional[int] = None,
         truncate_tokens: Optional[int] = None,
         max_retries: Optional[int] = None,
-    ) -> Optional[T]:
+        true_val: Optional[Any] = None,
+    ) -> CallResult:
         raw = await self.analyze_raw(
             session, text, model,
             system_prompt=system_prompt,
@@ -530,10 +544,42 @@ class AsyncTask:
             entry = self._build_log_entry(
                 raw, text, call_type, parse_status,
                 system_prompt, max_tokens, truncate_tokens,
+                true_val=true_val,
             )
             await self._log_writer.write(entry)
 
-        return result
+        return CallResult(
+            parsed=result,
+            raw_content=raw.content,
+            latency_ms=raw.latency_ms,
+            parse_status=parse_status,
+            status=raw.status,
+            finish_reason=raw.finish_reason,
+            error=raw.error,
+            truncated=raw.truncated,
+        )
+
+    async def analyze(
+        self,
+        session: aiohttp.ClientSession,
+        text: str,
+        model: Type[T],
+        *,
+        call_type: str = "analyze",
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        truncate_tokens: Optional[int] = None,
+        max_retries: Optional[int] = None,
+    ) -> Optional[T]:
+        result = await self._analyze_detailed(
+            session, text, model,
+            call_type=call_type,
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            truncate_tokens=truncate_tokens,
+            max_retries=max_retries,
+        )
+        return result.parsed
 
     # ------------------------------------------------------------------ #
     #  Public API — call-type wrappers
@@ -575,6 +621,50 @@ class AsyncTask:
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             truncate_tokens=truncate_tokens,
+            **kwargs,
+        )
+
+    async def classify_detailed(
+        self,
+        session: aiohttp.ClientSession,
+        text: str,
+        model: Type[T],
+        *,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 128,
+        truncate_tokens: int = 300,
+        true_val: Optional[Any] = None,
+        **kwargs,
+    ) -> CallResult:
+        return await self._analyze_detailed(
+            session, text, model,
+            call_type="classify",
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            truncate_tokens=truncate_tokens,
+            true_val=true_val,
+            **kwargs,
+        )
+
+    async def extract_theses_detailed(
+        self,
+        session: aiohttp.ClientSession,
+        text: str,
+        model: Type[T],
+        *,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 512,
+        truncate_tokens: int = 2000,
+        true_val: Optional[Any] = None,
+        **kwargs,
+    ) -> CallResult:
+        return await self._analyze_detailed(
+            session, text, model,
+            call_type="extract_theses",
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            truncate_tokens=truncate_tokens,
+            true_val=true_val,
             **kwargs,
         )
 
@@ -669,6 +759,105 @@ class AsyncTask:
             truncate_tokens=truncate_tokens,
         )
 
+    async def _analyze_many_detailed(
+        self,
+        texts: List[str],
+        model: Type[T],
+        concurrency: int = 50,
+        show_progress: bool = False,
+        *,
+        call_type: str = "analyze",
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        truncate_tokens: Optional[int] = None,
+    ) -> List[CallResult]:
+        semaphore = asyncio.Semaphore(concurrency)
+        results: List[Optional[CallResult]] = [None] * len(texts)
+
+        progress_bar = None
+        if show_progress:
+            try:
+                from tqdm import tqdm
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Install 'tqdm' to use show_progress=True"
+                ) from exc
+            progress_bar = tqdm(total=len(texts), desc=call_type)
+
+        connector = aiohttp.TCPConnector(limit=concurrency)
+        try:
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async def process_one(index: int, text: str) -> None:
+                    async with semaphore:
+                        try:
+                            results[index] = await self._analyze_detailed(
+                                session, text, model,
+                                call_type=call_type,
+                                system_prompt=system_prompt,
+                                max_tokens=max_tokens,
+                                truncate_tokens=truncate_tokens,
+                            )
+                        except Exception as exc:
+                            log.exception("Task %d crashed: %s", index, exc)
+                            results[index] = CallResult(
+                                parsed=None,
+                                raw_content=None,
+                                latency_ms=0.0,
+                                parse_status=None,
+                                status=ResponseStatus.UNEXPECTED_SHAPE,
+                                error=str(exc),
+                            )
+                        finally:
+                            if progress_bar:
+                                progress_bar.update(1)
+
+                await asyncio.gather(
+                    *(process_one(i, t) for i, t in enumerate(texts))
+                )
+        finally:
+            if progress_bar:
+                progress_bar.close()
+
+        return results
+
+    async def classify_many_detailed(
+        self,
+        texts: List[str],
+        model: Type[T],
+        concurrency: int = 50,
+        show_progress: bool = False,
+        *,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 128,
+        truncate_tokens: int = 300,
+    ) -> List[CallResult]:
+        return await self._analyze_many_detailed(
+            texts, model, concurrency, show_progress,
+            call_type="classify",
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            truncate_tokens=truncate_tokens,
+        )
+
+    async def extract_theses_many_detailed(
+        self,
+        texts: List[str],
+        model: Type[T],
+        concurrency: int = 50,
+        show_progress: bool = False,
+        *,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 512,
+        truncate_tokens: int = 2000,
+    ) -> List[CallResult]:
+        return await self._analyze_many_detailed(
+            texts, model, concurrency, show_progress,
+            call_type="extract_theses",
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            truncate_tokens=truncate_tokens,
+        )
+
     # ------------------------------------------------------------------ #
     #  Internals
     # ------------------------------------------------------------------ #
@@ -751,6 +940,7 @@ class AsyncTask:
         system_prompt: Optional[str],
         max_tokens: Optional[int],
         truncate_tokens: Optional[int],
+        true_val: Optional[Any] = None,
     ) -> dict:
         used_sp = system_prompt if system_prompt is not None else self._system_prompt
         used_mt = max_tokens if max_tokens is not None else self._max_tokens
@@ -784,4 +974,5 @@ class AsyncTask:
             "http_status": raw.http_status,
             "error": raw.error,
             "truncated": raw.truncated,
+            "true_val": true_val,
         }

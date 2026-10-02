@@ -55,3 +55,19 @@ seed = 42
 # Fraction of non-ambiguous records held out (holdout). Must be strictly
 # between 0 and 1.
 holdout_ratio = 0.2
+
+# Stage 1 baseline runner configuration (runner.py).
+# asyncTask.py and dataset.py ignore this section.
+[runner]
+# Max concurrent in-flight model requests. Conservative for CPU llama-server.
+concurrency = 4
+# fsync the checkpoint every N examples (1 = maximum durability).
+checkpoint_interval = 1
+# Directory for results artifacts and request logs.
+output_dir = "data/results"
+# Normalization language: "ru" (pymorphy3) or "en" (spaCy).
+language = "ru"
+# Classification prompt version to use (must match a PromptArtifact version).
+prompt_version = "classify-v0"
+# Path to the prepared dataset artifact (from dataset-and-prompt).
+dataset_artifact = "data/prepared_42_20261002T092615Z.jsonl"
