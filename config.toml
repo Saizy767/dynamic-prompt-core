@@ -84,3 +84,23 @@ group_short_max = 10
 group_long_min = 30
 # Directory for metrics artifacts.
 output_dir = "data/results"
+
+# Stage 1 thesis analyzer configuration (thesis_analyzer.py).
+# runner.py, asyncTask.py, dataset.py, and metrics.py ignore this section.
+[thesis_analyzer]
+# Embedding model for semantic clustering of normalized theses.
+# sentence-transformers model name; downloaded from Hugging Face on first use.
+embedding_model = "paraphrase-multilingual-MiniLM-L12-v2"
+# Cosine similarity thresholds for cluster assignment.
+# Below cosine_lower: not attached by cosine. Above cosine_upper: attached
+# directly. Between (grey zone): resolved by Manhattan distance.
+cosine_lower = 0.60
+cosine_upper = 0.75
+# Manhattan distance threshold for grey-zone resolution (L1 distance on
+# 384-dim embeddings). Tune after inspecting the first dump.
+manhattan_threshold = 8.0
+# Maximum number of clusters. When reached, unmatched theses are force-assigned
+# to the nearest cluster. 20 is suitable for datasets with <200 examples.
+max_clusters = 20
+# Directory for thesis bank dump artifacts.
+output_dir = "data/results"
