@@ -104,3 +104,19 @@ manhattan_threshold = 8.0
 max_clusters = 20
 # Directory for thesis bank dump artifacts.
 output_dir = "data/results"
+
+# Stage 2 rule candidate selector configuration (rule_candidate_selector.py).
+# thesis_analyzer.py and earlier stages ignore this section.
+[rule_candidate_selector]
+# Minimum cluster frequency to be considered a rule candidate. Clusters with
+# frequency below this threshold are excluded. 3 suits datasets with <200
+# examples; lower to 2 if borderline clusters are being dropped.
+frequency_threshold = 3
+# Number of candidate clusters to select after filtering and ranking. The
+# rule-formulation stage consumes these top-N candidates.
+top_n = 5
+# Maximum number of representative theses to attach per candidate cluster,
+# chosen by descending thesis frequency.
+max_representative_theses = 3
+# Directory for rule candidate artifacts.
+output_dir = "data/results"
