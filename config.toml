@@ -148,3 +148,19 @@ formulation_max_tokens = 64
 formulation_temperature = 0.0
 # Directory for prompt version artifacts.
 output_dir = "data/results"
+
+# Stage 2 version comparator configuration (version_comparator.py).
+# prompt_composer.py and earlier stages ignore this section.
+[version_comparator]
+# Maximum number of consecutive rollbacks before the optimization cycle stops.
+# When the counter reaches this limit, the cycle stops and the stop reason is
+# logged. 2 is conservative for small dev splits; raise to allow more attempts.
+max_consecutive_rollbacks = 2
+# Primary metric for the accept/rollback decision. The new version is accepted
+# when its value is >= the active version's. Options: macro_f1, accuracy.
+decision_metric = "macro_f1"
+# Tie-breaker metric used when the primary metric is equal. The new version is
+# accepted only when its value is strictly higher. Options: minority_f1, accuracy.
+tie_breaker_metric = "minority_f1"
+# Directory for decision artifacts.
+output_dir = "data/results"

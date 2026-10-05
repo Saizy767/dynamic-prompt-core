@@ -169,19 +169,24 @@ class BaselineRunner:
         run_id: Optional[str] = None,
         dataset_artifact: Optional[str] = None,
         duration: Optional[int] = None,
+        classify_prompt: Optional[PromptArtifact] = None,
     ) -> None:
         self._task = task
         self._config = config
         self._split = split
         self._run_id = run_id or f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
         self._language = config.language
-        self._prompt_version = config.prompt_version
         self._output_dir = config.output_dir
         self._concurrency = config.concurrency
         self._checkpoint_interval = config.checkpoint_interval
         self._timestamp: Optional[str] = None
 
-        self._classify_prompt = CLASSIFICATION_PROMPT_V0
+        if classify_prompt is not None:
+            self._classify_prompt = classify_prompt
+            self._prompt_version = classify_prompt.version
+        else:
+            self._classify_prompt = CLASSIFICATION_PROMPT_V0
+            self._prompt_version = config.prompt_version
         self._extract_prompt = EXTRACTION_PROMPT
 
         self._dataset_artifact = dataset_artifact or config.dataset_artifact
