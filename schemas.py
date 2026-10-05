@@ -42,3 +42,8 @@ class ThesisExtraction(BaseModel):
                     f"'{t}' has {word_count}"
                 )
         return v
+
+
+class RuleFormulation(BaseModel):
+    """Structured output for rule formulation: a single-sentence rule."""
+    rule: str

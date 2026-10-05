@@ -120,3 +120,31 @@ top_n = 5
 max_representative_theses = 3
 # Directory for rule candidate artifacts.
 output_dir = "data/results"
+
+# Stage 3 prompt composer configuration (prompt_composer.py).
+# rule_candidate_selector.py and earlier stages ignore this section.
+[prompt_composer]
+# Maximum number of rules allowed in the assembled prompt version.
+max_rules = 5
+# Maximum total prompt tokens (system prompt only). The token count uses the
+# AsyncTask tokenizer; falls back to word count when unavailable. The base
+# layers alone are ~155 tokens, so 300 leaves headroom for up to 5 rules.
+max_prompt_tokens = 300
+# Maximum number of words per formulated rule. Longer rules are truncated.
+max_rule_words = 15
+# Cosine similarity threshold for the distortion check. Rules whose embedding
+# vs. the source cluster centroid falls below this are rejected (or
+# reformulated once when allow_reformulation is true).
+distortion_threshold = 0.75
+# When true, a rule failing the distortion check gets one reformulation
+# attempt before rejection.
+allow_reformulation = true
+# Embedding model for the distortion check. Reuses the sentence-transformers
+# model from thesis_analyzer.py by default.
+embedding_model = "paraphrase-multilingual-MiniLM-L12-v2"
+# Max tokens for the LLM formulation call.
+formulation_max_tokens = 64
+# Temperature for the LLM formulation call (0 = deterministic).
+formulation_temperature = 0.0
+# Directory for prompt version artifacts.
+output_dir = "data/results"
