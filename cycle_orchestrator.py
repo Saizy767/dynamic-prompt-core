@@ -398,7 +398,7 @@ async def compose_new_version(
     base_layers = prompt_composer.load_base_layers(active_prompt)
     centroids = prompt_composer.load_centroids(thesis_bank_path)
 
-    prompt_artifact, rules_with_lineage, counters = await prompt_composer.compose(
+    prompt_artifact, rules_with_lineage, counters, rejected_rules = await prompt_composer.compose(
         candidates, base_layers, centroids, pc_config, async_task,
         active_prompt.version,
     )
@@ -416,6 +416,7 @@ async def compose_new_version(
         counters,
         pc_config,
         pc_config.output_dir,
+        rejected_rules,
     )
     return prompt_artifact, artifact_path, source_candidates
 

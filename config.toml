@@ -221,3 +221,25 @@ atomic_writes = true
 # Path to the append-only operation log (JSONL). Each store operation appends
 # one line with timestamp, operation, version, and details.
 log_path = "data/prompt_store.jsonl"
+
+# Stage 3 cycle observer configuration (cycle_observer.py).
+# This is a read-only component that loads the artifacts produced by a completed
+# cycle and renders a human- or machine-readable review. It mutates no cycle
+# state; it only reads artifacts and writes its own report + log.
+[cycle_observer]
+# Output format: "markdown" (human-readable, README/issue-ready) or "json"
+# (machine-readable).
+output_format = "markdown"
+# Path where the observer report is written. Overridable via the --output flag.
+output_path = "observer_report.md"
+# Maximum number of characters of example text to include in the changed-
+# decisions section. Longer text is truncated with an ellipsis.
+max_example_text_length = 100
+# Number of clusters to include in the thesis-store top-N summary, ranked by
+# frequency.
+top_clusters_count = 10
+# When true, holdout metrics are included in the metric-trends section. When
+# false, holdout columns are omitted.
+include_holdout = true
+# Directory where cycle artifacts are discovered and the observer log is written.
+output_dir = "data/results"

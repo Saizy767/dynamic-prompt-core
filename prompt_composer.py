@@ -462,14 +462,17 @@ async def compose(
     config: PromptComposerConfig,
     async_task: Any,
     base_version: str,
-) -> Tuple[PromptArtifact, List[Dict[str, Any]], Dict[str, int]]:
+) -> Tuple[PromptArtifact, List[Dict[str, Any]], Dict[str, int], List[Dict[str, Any]]]:
     """Run the full composition pipeline over all candidates.
 
     Chains formulation, length enforcement, distortion check, optional
     reformulation, and assembly. Returns (prompt_artifact, rules_with_lineage,
-    counters) where each rule carries cluster_id and text, and counters has
-    candidates_in, rules_formulated, rejected_distortion, rejected_limits,
-    final_rules_count.
+    counters, rejected_rules) where each rule carries cluster_id and text,
+    counters has candidates_in, rules_formulated, rejected_distortion,
+    rejected_limits, final_rules_count, and rejected_rules is a list of
+    {cluster_id, text, cosine, threshold, reason} for each candidate that did
+    not become an accepted rule (reason is one of distortion,
+    empty_formulation).
     """
     candidates_in = len(candidates)
     rules_formulated = 0
@@ -477,6 +480,7 @@ async def compose(
 
     accepted_rules: List[str] = []
     rules_with_lineage: List[Dict[str, Any]] = []
+    rejected_rules: List[Dict[str, Any]] = []
 
     for candidate in candidates:
         cluster_id = candidate["cluster_id"]
@@ -488,6 +492,13 @@ async def compose(
                 cluster_id,
             )
             rejected_distortion += 1
+            rejected_rules.append({
+                "cluster_id": cluster_id,
+                "text": None,
+                "cosine": None,
+                "threshold": config.distortion_threshold,
+                "reason": "empty_formulation",
+            })
             continue
         rules_formulated += 1
 
@@ -524,6 +535,13 @@ async def compose(
                 similarity if similarity is not None else 0.0,
             )
             rejected_distortion += 1
+            rejected_rules.append({
+                "cluster_id": cluster_id,
+                "text": rule,
+                "cosine": similarity,
+                "threshold": config.distortion_threshold,
+                "reason": "distortion",
+            })
             continue
 
         accepted_rules.append(rule)
@@ -544,7 +562,7 @@ async def compose(
         "final_rules_count": final_rules_count,
     }
 
-    return prompt_artifact, rules_with_lineage, counters
+    return prompt_artifact, rules_with_lineage, counters, rejected_rules
 
 
 # --------------------------------------------------------------------------- #
@@ -559,6 +577,7 @@ def write_prompt_version(
     counters: Dict[str, int],
     config: PromptComposerConfig,
     output_dir: str,
+    rejected_rules: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Serialize the new prompt version to a JSON artifact.
 
@@ -590,6 +609,7 @@ def write_prompt_version(
                 "embedding_model": config.embedding_model,
             },
             "counters": counters,
+            "rejected_rules": rejected_rules if rejected_rules is not None else [],
         },
     }
 
@@ -602,10 +622,17 @@ def load_prompt_version(path: str) -> Dict[str, Any]:
     """Restore a prompt version from a prompt_v*_*_*.json artifact.
 
     Returns a dict with version, text, hash, rules, source_candidates,
-    base_version, created_at, and metadata. No composition is re-run.
+    base_version, created_at, and metadata. No composition is re-run. The
+    metadata.rejected_rules field defaults to an empty list when absent (older
+    artifacts).
     """
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    meta = data.get("metadata", {})
+    if "rejected_rules" not in meta:
+        meta["rejected_rules"] = []
+        data["metadata"] = meta
+    return data
 
 
 # --------------------------------------------------------------------------- #
@@ -644,7 +671,7 @@ async def _run_composition(
     base_version: str,
     endpoint: str,
     config_path: str,
-) -> Tuple[PromptArtifact, List[Dict[str, Any]], Dict[str, int]]:
+) -> Tuple[PromptArtifact, List[Dict[str, Any]], Dict[str, int], List[Dict[str, Any]]]:
     """Create an AsyncTask and run the composition pipeline."""
     from asyncTask import AsyncTask
 
@@ -693,7 +720,7 @@ def main() -> None:
 
     candidates = candidate_artifact["candidates"]
 
-    prompt_artifact, rules_with_lineage, counters = asyncio.run(
+    prompt_artifact, rules_with_lineage, counters, rejected_rules = asyncio.run(
         _run_composition(
             candidates,
             base_layers,
@@ -743,6 +770,7 @@ def main() -> None:
         counters,
         config,
         config.output_dir,
+        rejected_rules,
     )
     _print_summary(prompt_artifact, counters, run_id, base_version)
     print(f"Prompt version: {artifact_path}")
