@@ -71,20 +71,19 @@ def build_classification_prompt(
 _V0_LAYERS = PromptLayer(
     role=(
         "You are a binary text classifier. You read a short text and decide "
-        "whether it describes a real disaster event (1) or not (0)."
+        "whether it belongs to class 1 or class 0."
     ),
     task=(
-        "Classify the user text into one of two classes: 1 (the text is about "
-        "an actual disaster, emergency, or catastrophic event) or 0 (the text "
-        "is not about a real disaster, e.g. metaphor, news commentary, "
-        "film, or joke)."
+        "Classify the user text into one of two classes: 1 (the text matches "
+        "the target category described by the rules) or 0 (the text does not "
+        "match, e.g. it is unrelated, metaphorical, or off-topic)."
     ),
     rules=[
         "Decide based only on the content of the text, not on hashtags, "
         "mentions, or URLs alone.",
-        "If the text uses disaster words metaphorically or in jest, classify "
-        "as 0.",
-        "News headlines reporting a real event are 1.",
+        "If the text uses target-category words metaphorically or in jest, "
+        "classify as 0.",
+        "Factual statements that clearly match the target category are 1.",
         "If the evidence is genuinely ambiguous, lean toward 0 and set a "
         "low confidence.",
     ],
