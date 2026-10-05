@@ -164,3 +164,40 @@ decision_metric = "macro_f1"
 tie_breaker_metric = "minority_f1"
 # Directory for decision artifacts.
 output_dir = "data/results"
+
+# Stage 3 cycle orchestrator configuration (cycle_orchestrator.py).
+# This is the top-level entry point that drives the full optimization loop.
+# All earlier stage components are called via their public APIs.
+[cycle_orchestrator]
+# Maximum number of rounds to run. Each round runs the active prompt on dev,
+# computes metrics, updates the thesis bank, selects candidates, composes a new
+# version, runs it on dev, and decides accept/rollback. The cycle stops when
+# the round counter reaches this limit.
+max_rounds = 5
+# Maximum number of consecutive rollbacks before the cycle stops. The counter
+# is reset on acceptance. Delegates to version_comparator's check_stop.
+max_consecutive_rollbacks = 2
+# Dataset splits to use for the active and holdout runs. The dev split drives
+# the accept/rollback decision; the holdout split is logged only.
+dev_split = "dev"
+holdout_split = "holdout"
+# Path to the active prompt-version artifact (prompt_v*_*_*.json). When empty,
+# the cycle starts from the built-in CLASSIFICATION_PROMPT_V0 baseline.
+prompt_store_path = ""
+# Path to the thesis-bank artifact to seed the cycle. When empty, the cycle
+# starts with an empty thesis bank and builds it in the first round.
+thesis_bank_path = ""
+# Path to the candidate-queue artifact. When empty, the queue is filled by the
+# rule-candidate selector at the start of each round.
+candidate_queue_path = ""
+# When true, any step failure stops the cycle immediately with stop reason
+# unrecoverable_error. When false, only unrecoverable errors stop the cycle.
+stop_on_first_error = false
+# When true, the full cycle state is dumped to a JSON file after each round,
+# enabling resume from the last completed round.
+dump_state_after_each_round = true
+# Format for per-round reports and the final summary. Currently only "json" is
+# supported; "markdown" may be added in a future change.
+report_format = "json"
+# Directory for cycle artifacts (reports, summaries, state dumps, cycle log).
+output_dir = "data/results"
