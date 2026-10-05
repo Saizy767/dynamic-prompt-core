@@ -243,3 +243,40 @@ top_clusters_count = 10
 include_holdout = true
 # Directory where cycle artifacts are discovered and the observer log is written.
 output_dir = "data/results"
+
+# Stage 4 teacher refinement configuration (thesis_refiner.py).
+# This component refines Tiny-model thesis candidates using a larger teacher
+# model over a separate endpoint. It filters noisy/interpretive theses,
+# reformulates unstable phrasings, adds missed theses, and writes a reloadable
+# theses_refined_*.jsonl artifact. runner.py and earlier stages ignore this
+# section.
+[teacher]
+# Endpoint for the teacher model (OpenAI-compatible /v1). Required: the
+# refiner will not initialize without it. Must be distinct from [llm].
+endpoint = "http://127.0.0.1:8081/v1"
+# Model name the teacher server presents (sent as the "model" field). Required.
+model_name = "qwen2.5-7b-instruct"
+# Sampling temperature for teacher calls (0 = deterministic).
+temperature = 0.0
+# Max tokens for the teacher response (the RefinementPlan JSON).
+max_tokens = 512
+# Seconds to wait for a single teacher call before timing out.
+timeout = 60
+# Max retry attempts for retryable teacher errors (network, 5xx).
+max_retries = 3
+# When true, downstream stages use theses_refined when the artifact exists;
+# when false, they fall back to theses_raw_tiny.
+use_refined = true
+# When true, the teacher filters noisy (generic, uninformative) theses.
+filter_noisy = true
+# When true, the teacher filters or reformulates interpretive theses into
+# extractive form.
+filter_interpretive = true
+# When true, the teacher may add theses the Tiny model missed (tagged
+# source=teacher). When false, only filtering and reformulation are done.
+allow_additions = true
+# Directory for the refined theses artifact.
+output_dir = "data/results"
+# Path to the append-only refinement log (JSONL). Each operation appends one
+# line with timestamp, operation, example id, and details.
+log_path = "data/thesis_refiner.jsonl"
