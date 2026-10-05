@@ -201,3 +201,23 @@ dump_state_after_each_round = true
 report_format = "json"
 # Directory for cycle artifacts (reports, summaries, state dumps, cycle log).
 output_dir = "data/results"
+
+# Stage 3 prompt version store configuration (prompt_store.py).
+# This is the single source of truth for prompt version lifecycle: persisting
+# versions, tracking the active version, archiving displaced versions, and
+# reconstructing version lineage. The composer, comparator, and orchestrator
+# read from and write to this store.
+[prompt_store]
+# Path to the store JSON file. All version records are kept in this one file.
+# Required: the store will not initialize without a path.
+store_path = "data/prompt_store.json"
+# Maximum number of versions to retain. When unset (commented), there is no
+# limit and no pruning. When set, the oldest archived versions (not in the
+# active version's lineage) are deleted when the count exceeds this limit.
+# max_versions = 100
+# When true, the store file is written atomically (write-to-temp then rename)
+# to prevent corruption on crash. Set to false only for debugging.
+atomic_writes = true
+# Path to the append-only operation log (JSONL). Each store operation appends
+# one line with timestamp, operation, version, and details.
+log_path = "data/prompt_store.jsonl"
