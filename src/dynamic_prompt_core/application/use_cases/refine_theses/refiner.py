@@ -1,5 +1,5 @@
 """
-Stage 4 teacher refinement (thesis_refiner.py).
+Stage 4 teacher refinement use case.
 
 Refines Tiny-model thesis candidates using a larger teacher model over a
 separate endpoint. Loads theses from a stage1-baseline-runner results artifact,
@@ -7,43 +7,31 @@ asks the teacher model to filter noisy/interpretive theses, reformulate
 unstable phrasings, and add missed theses, then writes a reloadable
 theses_refined_*.jsonl artifact. Original Tiny-model theses are preserved
 verbatim; per-example teacher failures never abort the run.
-
-Quick start
------------
-    python thesis_refiner.py --results data/results/results_run-*.jsonl
 """
-
 from __future__ import annotations
 
-import argparse
-import asyncio
 import json
 import logging
 import os
 import sys
-import tomllib
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-import aiohttp
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-
-from dynamic_prompt_core.infrastructure.llm import AsyncTask, RawResponse, ResponseStatus
+from dynamic_prompt_core.application.use_cases.refine_theses.refine_theses_deps import (
+    RefineThesesDeps,
+)
+from dynamic_prompt_core.application.use_cases.refine_theses.result import (
+    RefineThesesInput,
+    RefineThesesResult,
+)
+from dynamic_prompt_core.domain.services.thesis_refinement import (
+    DropEntry,
+    RefinementPlanData,
+    ReformulatePair,
+    apply_refinement,
+)
 
 log = logging.getLogger(__name__)
-
-DEFAULT_CONFIG_PATH = "config.toml"
-DEFAULT_TEMPERATURE = 0.0
-DEFAULT_MAX_TOKENS = 512
-DEFAULT_TIMEOUT = 60
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_USE_REFINED = True
-DEFAULT_FILTER_NOISY = True
-DEFAULT_FILTER_INTERPRETIVE = True
-DEFAULT_ALLOW_ADDITIONS = True
-DEFAULT_OUTPUT_DIR = "data/results"
-DEFAULT_LOG_PATH = "data/thesis_refiner.jsonl"
 
 REQUIRED_CANDIDATE_FIELDS = ("id", "theses_raw", "theses_norm", "extract_status")
 _EXTRACT_STATUS_FAILED = "failed"
@@ -51,115 +39,6 @@ _EXTRACT_STATUS_FAILED = "failed"
 
 class ThesisRefinerError(ValueError):
     """Raised when refinement fails or an artifact is invalid."""
-
-
-# --------------------------------------------------------------------------- #
-#  Config
-# --------------------------------------------------------------------------- #
-@dataclass
-class TeacherRefinerConfig:
-    endpoint: str = ""
-    model_name: str = ""
-    temperature: float = DEFAULT_TEMPERATURE
-    max_tokens: int = DEFAULT_MAX_TOKENS
-    timeout: int = DEFAULT_TIMEOUT
-    max_retries: int = DEFAULT_MAX_RETRIES
-    use_refined: bool = DEFAULT_USE_REFINED
-    filter_noisy: bool = DEFAULT_FILTER_NOISY
-    filter_interpretive: bool = DEFAULT_FILTER_INTERPRETIVE
-    allow_additions: bool = DEFAULT_ALLOW_ADDITIONS
-    output_dir: str = DEFAULT_OUTPUT_DIR
-    log_path: str = DEFAULT_LOG_PATH
-
-    @classmethod
-    def from_config(cls, config_path: str = DEFAULT_CONFIG_PATH) -> TeacherRefinerConfig:
-        with open(config_path, "rb") as f:
-            config = tomllib.load(f)
-        t = config.get("teacher", {})
-        endpoint = t.get("endpoint", "")
-        if not endpoint:
-            raise ThesisRefinerError("Missing required config key: teacher.endpoint")
-        model_name = t.get("model_name", "")
-        if not model_name:
-            raise ThesisRefinerError("Missing required config key: teacher.model_name")
-        return cls(
-            endpoint=endpoint,
-            model_name=model_name,
-            temperature=float(t.get("temperature", DEFAULT_TEMPERATURE)),
-            max_tokens=int(t.get("max_tokens", DEFAULT_MAX_TOKENS)),
-            timeout=int(t.get("timeout", DEFAULT_TIMEOUT)),
-            max_retries=int(t.get("max_retries", DEFAULT_MAX_RETRIES)),
-            use_refined=bool(t.get("use_refined", DEFAULT_USE_REFINED)),
-            filter_noisy=bool(t.get("filter_noisy", DEFAULT_FILTER_NOISY)),
-            filter_interpretive=bool(t.get("filter_interpretive", DEFAULT_FILTER_INTERPRETIVE)),
-            allow_additions=bool(t.get("allow_additions", DEFAULT_ALLOW_ADDITIONS)),
-            output_dir=t.get("output_dir", DEFAULT_OUTPUT_DIR),
-            log_path=t.get("log_path", DEFAULT_LOG_PATH),
-        )
-
-
-# --------------------------------------------------------------------------- #
-#  Teacher response schema
-# --------------------------------------------------------------------------- #
-class ReformulateItem(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-    from_: str = Field(alias="from")
-    to: str
-
-
-class DropItem(BaseModel):
-    thesis: str
-    reason: str
-
-
-class RefinementPlan(BaseModel):
-    keep: list[str] = field(default_factory=list)
-    reformulate: list[ReformulateItem] = field(default_factory=list)
-    drop: list[DropItem] = field(default_factory=list)
-    add: list[str] = field(default_factory=list)
-
-
-# --------------------------------------------------------------------------- #
-#  Teacher system prompt
-# --------------------------------------------------------------------------- #
-def build_teacher_prompt(config: TeacherRefinerConfig) -> str:
-    """Build the system prompt for the teacher model.
-
-    Conditionally includes noisy-filter, interpretive-filter, and addition
-    instructions based on the config flags.
-    """
-    parts: list[str] = [
-        "You are a thesis refinement assistant.",
-        "You receive a text and a list of candidate theses extracted by a smaller model.",
-        "Return a JSON object with four arrays:",
-        '- "keep": theses to preserve unchanged (extractive, informative).',
-        '- "reformulate": objects {"from": <original>, "to": <new>} for theses'
-        " that need a more stable extractive phrasing. The reformulated text"
-        " must preserve meaning and not exceed the original length.",
-        '- "drop": objects {"thesis": <text>, "reason": <why>} for theses to exclude.',
-    ]
-    if config.filter_noisy:
-        parts.append(
-            "Drop noisy theses: generic phrases applicable to any text that"
-            " carry no signal for classification."
-        )
-    if config.filter_interpretive:
-        parts.append(
-            "Drop or reformulate interpretive theses (conclusions about the"
-            " text) into extractive form (features present in the text)."
-        )
-    if config.allow_additions:
-        parts.append(
-            '- "add": missed theses present in the text and relevant for'
-            " classification, as plain strings."
-        )
-    else:
-        parts.append('Do not add any new theses: "add" must be an empty array.')
-    parts.append(
-        "Every input thesis must appear in exactly one of keep, reformulate, or"
-        " drop. Return only the JSON object."
-    )
-    return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -211,137 +90,6 @@ def split_candidates(
 
 
 # --------------------------------------------------------------------------- #
-#  Teacher transport
-# --------------------------------------------------------------------------- #
-def _build_teacher_task(
-    config: TeacherRefinerConfig,
-    config_path: str = DEFAULT_CONFIG_PATH,
-) -> AsyncTask:
-    """Construct an AsyncTask pointed at the teacher endpoint.
-
-    Overrides _served_model_name so the teacher endpoint receives the correct
-    model field (design D2).
-    """
-    task = AsyncTask(
-        config_path=config_path,
-        endpoint=config.endpoint,
-        completion_timeout=config.timeout,
-        max_retries=config.max_retries,
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
-        truncate_tokens=2000,
-    )
-    task._served_model_name = config.model_name
-    return task
-
-
-async def _call_teacher(
-    task: AsyncTask,
-    session: aiohttp.ClientSession,
-    text: str,
-    theses: list[str],
-    config: TeacherRefinerConfig,
-) -> tuple[RefinementPlan, float, dict[str, Any] | None]:
-    """Send one teacher call for an example and parse the RefinementPlan.
-
-    Returns (plan, latency_ms, usage). Raises on any failure (network, parse,
-    schema mismatch) so the caller can apply failure isolation (design D7).
-    """
-    system_prompt = build_teacher_prompt(config)
-    user_message = f"Text:\n{text}\n\nCandidate theses:\n" + "\n".join(f"- {t}" for t in theses)
-    raw: RawResponse = await task.analyze_raw(
-        session,
-        user_message,
-        RefinementPlan,
-        system_prompt=system_prompt,
-        max_tokens=config.max_tokens,
-        truncate_tokens=2000,
-    )
-    if raw.status != ResponseStatus.OK or not raw.content:
-        raise ThesisRefinerError(
-            f"Teacher call failed with status {raw.status.value}"
-            + (f": {raw.error}" if raw.error else "")
-        )
-    try:
-        plan = RefinementPlan.model_validate_json(raw.content)
-    except ValidationError as exc:
-        raise ThesisRefinerError(
-            f"Teacher response did not match RefinementPlan schema: {exc}"
-        ) from exc
-    return plan, raw.latency_ms, raw.usage
-
-
-# --------------------------------------------------------------------------- #
-#  Refinement logic
-# --------------------------------------------------------------------------- #
-def _apply_refinement(
-    theses_raw: list[str],
-    plan: RefinementPlan,
-    config: TeacherRefinerConfig,
-    log_fn: Any | None = None,
-    example_id: Any = None,
-) -> tuple[list[str], list[dict[str, str]], list[dict[str, str]]]:
-    """Build (theses_refined, filtered_out, added) from a RefinementPlan.
-
-    theses_refined order: keep, then reformulated, then added (design D4).
-    """
-    theses_refined: list[str] = []
-    filtered_out: list[dict[str, str]] = []
-    added: list[dict[str, str]] = []
-
-    # keep
-    for t in plan.keep:
-        theses_refined.append(t)
-
-    # reformulate (with length enforcement, design D5)
-    for item in plan.reformulate:
-        if len(item.to) > len(item.from_):
-            theses_refined.append(item.from_)
-            if log_fn is not None:
-                log_fn(
-                    "reformulate",
-                    example_id,
-                    {
-                        "from": item.from_,
-                        "to": item.to,
-                        "kept_original": True,
-                        "reason": "reformulation longer than original",
-                    },
-                )
-        else:
-            theses_refined.append(item.to)
-            if log_fn is not None:
-                log_fn(
-                    "reformulate",
-                    example_id,
-                    {"from": item.from_, "to": item.to, "kept_original": False},
-                )
-
-    # drop (noisy / interpretive filtering)
-    for drop_item in plan.drop:
-        if config.filter_noisy:
-            filtered_out.append({"thesis": drop_item.thesis, "reason": drop_item.reason})
-            if log_fn is not None:
-                log_fn(
-                    "filter",
-                    example_id,
-                    {"thesis": drop_item.thesis, "reason": drop_item.reason},
-                )
-        else:
-            theses_refined.append(drop_item.thesis)
-
-    # add
-    if config.allow_additions:
-        for t in plan.add:
-            theses_refined.append(t)
-            added.append({"text": t, "source": "teacher"})
-            if log_fn is not None:
-                log_fn("add", example_id, {"text": t, "source": "teacher"})
-
-    return theses_refined, filtered_out, added
-
-
-# --------------------------------------------------------------------------- #
 #  Refined artifact write and reload
 # --------------------------------------------------------------------------- #
 def write_refined_artifact(
@@ -385,208 +133,217 @@ def load_refined(path: str) -> list[dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------- #
-#  Refiner
+#  Logging helper
 # --------------------------------------------------------------------------- #
-@dataclass
-class RefinerTotals:
-    processed: int = 0
-    teacher_errors: int = 0
-    filtered: int = 0
-    reformulated: int = 0
-    added: int = 0
-    skipped: int = 0
-    total_prompt_tokens: int = 0
-    total_completion_tokens: int = 0
-    total_latency_ms: float = 0.0
+def _append_log(log_path: str, operation: str, example_id: Any, details: dict[str, Any]) -> None:
+    """Append one JSON log line. Best-effort: never blocks refinement."""
+    entry = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "operation": operation,
+        "id": example_id,
+        "details": details,
+    }
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        print(
+            f"WARNING: failed to write refinement log: {exc}",
+            file=sys.stderr,
+        )
 
 
-class ThesisRefiner:
-    """Drives the per-example refinement loop with failure isolation."""
+# --------------------------------------------------------------------------- #
+#  Use case
+# --------------------------------------------------------------------------- #
+async def refine_theses(
+    deps: RefineThesesDeps,
+    inp: RefineThesesInput,
+) -> RefineThesesResult:
+    """Run the teacher refinement use case.
 
-    def __init__(
-        self,
-        config: TeacherRefinerConfig,
-        task: AsyncTask,
-        log_path: str = DEFAULT_LOG_PATH,
-    ) -> None:
-        self._config = config
-        self._task = task
-        self._log_path = log_path
-        self._totals = RefinerTotals()
+    Loads candidates from the results artifact, calls the teacher model via
+    the port for each example, applies the refinement plan via the domain
+    service, and writes the refined' artifact. Per-example teacher failures
+    are isolated: the example keeps its original theses and processing
+    continues.
+    """
+    rows = load_candidates(inp.results_path)
+    _append_log(inp.log_path, "load_candidates", None, {"count": len(rows), "path": inp.results_path})
 
-    # -- logging ----------------------------------------------------------- #
-    def _log(self, operation: str, example_id: Any, details: dict[str, Any]) -> None:
-        """Append one JSON log line. Best-effort: never blocks refinement."""
-        entry = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "operation": operation,
-            "id": example_id,
-            "details": details,
-        }
-        try:
-            with open(self._log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except OSError as exc:
-            print(
-                f"WARNING: failed to write refinement log: {exc}",
-                file=sys.stderr,
-            )
+    to_process: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("extract_status") == _EXTRACT_STATUS_FAILED:
+            skipped.append(row)
+            _append_log(inp.log_path, "skip", row["id"], {"reason": "extract_status=failed"})
+        else:
+            to_process.append(row)
 
-    # -- per-example ------------------------------------------------------- #
-    async def _refine_one(
-        self,
-        session: aiohttp.ClientSession,
-        row: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Refine a single example. Never raises (design D7)."""
+    records: list[dict[str, Any]] = []
+    processed = 0
+    teacher_errors = 0
+    filtered = 0
+    reformulated = 0
+    added = 0
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_latency_ms = 0.0
+
+    for row in to_process:
         example_id = row["id"]
         theses_raw_tiny: list[str] = list(row.get("theses_raw", []))
         text: str = row.get("text", "")
 
         try:
-            plan, latency_ms, usage = await _call_teacher(
-                self._task, session, text, theses_raw_tiny, self._config
-            )
+            review = await deps.teacher_llm_client.review_theses(text, theses_raw_tiny)
         except Exception as exc:
-            self._totals.teacher_errors += 1
-            self._log("teacher_error", example_id, {"error": str(exc)})
-            return {
+            teacher_errors += 1
+            _append_log(inp.log_path, "teacher_error", example_id, {"error": str(exc)})
+            records.append({
                 "id": example_id,
                 "theses_raw_tiny": theses_raw_tiny,
                 "theses_refined": theses_raw_tiny,
                 "filtered_out": [],
                 "added": [],
-            }
+            })
+            continue
 
-        # per-call accounting (design D8)
         prompt_tokens = 0
         completion_tokens = 0
-        if usage:
-            prompt_tokens = int(usage.get("prompt_tokens", 0))
-            completion_tokens = int(usage.get("completion_tokens", 0))
-        self._totals.total_prompt_tokens += prompt_tokens
-        self._totals.total_completion_tokens += completion_tokens
-        self._totals.total_latency_ms += latency_ms
-        self._log(
+        if review.usage:
+            prompt_tokens = int(review.usage.get("prompt_tokens", 0))
+            completion_tokens = int(review.usage.get("completion_tokens", 0))
+        total_prompt_tokens += prompt_tokens
+        total_completion_tokens += completion_tokens
+        total_latency_ms += review.latency_ms
+        _append_log(
+            inp.log_path,
             "teacher_call",
             example_id,
             {
-                "latency_ms": latency_ms,
+                "latency_ms": review.latency_ms,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "status": "ok",
             },
         )
 
-        theses_refined, filtered_out, added = _apply_refinement(
-            theses_raw_tiny,
-            plan,
-            self._config,
-            log_fn=self._log,
-            example_id=example_id,
+        plan = RefinementPlanData(
+            keep=list(review.keep),
+            reformulate=[
+                ReformulatePair(from_=item["from"], to=item["to"])
+                for item in review.reformulate
+            ],
+            drop=[
+                DropEntry(thesis=item["thesis"], reason=item["reason"])
+                for item in review.drop
+            ],
+            add=list(review.add),
         )
 
-        self._totals.processed += 1
-        self._totals.filtered += len(filtered_out)
-        self._totals.reformulated += sum(1 for item in plan.reformulate)
-        self._totals.added += len(added)
+        theses_refined, filtered_out, added_list = apply_refinement(
+            theses_raw_tiny,
+            plan,
+            filter_noisy=inp.filter_noisy,
+            filter_interpretive=inp.filter_interpretive,
+            allow_additions=inp.allow_additions,
+        )
 
-        return {
+        for item in review.reformulate:
+            from_val = item["from"]
+            to_val = item["to"]
+            kept_original = len(to_val) > len(from_val)
+            _append_log(
+                inp.log_path,
+                "reformulate",
+                example_id,
+                {
+                    "from": from_val,
+                    "to": to_val,
+                    "kept_original": kept_original,
+                },
+            )
+
+        for drop_item in review.drop:
+            _append_log(
+                inp.log_path,
+                "filter",
+                example_id,
+                {"thesis": drop_item["thesis"], "reason": drop_item["reason"]},
+            )
+
+        for add_item in review.add:
+            _append_log(
+                inp.log_path,
+                "add",
+                example_id,
+                {"text": add_item, "source": "teacher"},
+            )
+
+        processed += 1
+        filtered += len(filtered_out)
+        reformulated += len(review.reformulate)
+        added += len(added_list)
+
+        records.append({
             "id": example_id,
             "theses_raw_tiny": theses_raw_tiny,
             "theses_refined": theses_refined,
             "filtered_out": filtered_out,
-            "added": added,
-        }
+            "added": added_list,
+        })
 
-    # -- run --------------------------------------------------------------- #
-    async def run(self, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], RefinerTotals]:
-        """Refine all candidates. Returns (records, totals)."""
-        to_process, skipped = split_candidates(rows, log_fn=self._log)
-        self._totals.skipped = len(skipped)
+    for row in skipped:
+        records.append({
+            "id": row["id"],
+            "theses_raw_tiny": list(row.get("theses_raw", [])),
+            "theses_refined": list(row.get("theses_raw", [])),
+            "filtered_out": [],
+            "added": [],
+        })
 
-        records: list[dict[str, Any]] = []
-        connector = aiohttp.TCPConnector(limit=4)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            for row in to_process:
-                rec = await self._refine_one(session, row)
-                records.append(rec)
+    artifact_path = write_refined_artifact(
+        records, inp.run_id, inp.prompt_version, inp.output_dir,
+    )
+    _append_log(inp.log_path, "write_artifact", None, {"path": artifact_path, "records": len(records)})
 
-        # skipped examples keep their originals
-        for row in skipped:
-            records.append(
-                {
-                    "id": row["id"],
-                    "theses_raw_tiny": list(row.get("theses_raw", [])),
-                    "theses_refined": list(row.get("theses_raw", [])),
-                    "filtered_out": [],
-                    "added": [],
-                }
-            )
-
-        return records, self._totals
-
-    # -- summary ----------------------------------------------------------- #
-    def print_summary(self, totals: RefinerTotals) -> None:
-        """Print the end-of-run summary with all counters and costs."""
-        print(
-            f"Refinement summary"
-            f"  (processed={totals.processed},"
-            f" teacher_errors={totals.teacher_errors},"
-            f" filtered={totals.filtered},"
-            f" reformulated={totals.reformulated},"
-            f" added={totals.added},"
-            f" skipped={totals.skipped})"
-        )
-        print(
-            f"Cost  (prompt_tokens={totals.total_prompt_tokens},"
-            f" completion_tokens={totals.total_completion_tokens},"
-            f" total_latency_ms={totals.total_latency_ms:.1f})"
-        )
+    return RefineThesesResult(
+        processed=processed,
+        teacher_errors=teacher_errors,
+        filtered=filtered,
+        reformulated=reformulated,
+        added=added,
+        skipped=len(skipped),
+        total_prompt_tokens=total_prompt_tokens,
+        total_completion_tokens=total_completion_tokens,
+        total_latency_ms=total_latency_ms,
+        artifact_path=artifact_path,
+    )
 
 
-# --------------------------------------------------------------------------- #
-#  CLI
-# --------------------------------------------------------------------------- #
-def _parse_artifact_name(path: str) -> tuple[str, str]:
+def print_summary(result: RefineThesesResult) -> None:
+    """Print the end-of-run summary with all counters and costs."""
+    print(
+        f"Refinement summary"
+        f"  (processed={result.processed},"
+        f" teacher_errors={result.teacher_errors},"
+        f" filtered={result.filtered},"
+        f" reformulated={result.reformulated},"
+        f" added={result.added},"
+        f" skipped={result.skipped})"
+    )
+    print(
+        f"Cost  (prompt_tokens={result.total_prompt_tokens},"
+        f" completion_tokens={result.total_completion_tokens},"
+        f" total_latency_ms={result.total_latency_ms:.1f})"
+    )
+
+
+def parse_artifact_name(path: str) -> tuple[str, str]:
     """Best-effort extraction of run_id and prompt_version from a results path."""
     base = os.path.basename(path)
     parts = base.replace(".jsonl", "").split("_")
     if len(parts) >= 4 and parts[0] == "results":
         return parts[1], parts[2]
     return "unknown", "unknown"
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Stage 4 teacher refinement")
-    parser.add_argument(
-        "--results",
-        required=True,
-        help="Path to results_*.jsonl artifact from stage1-baseline-runner",
-    )
-    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
-    parser.add_argument("--run-id", default=None, help="Override run_id")
-    parser.add_argument("--prompt-version", default=None, help="Override prompt_version")
-    args = parser.parse_args()
-
-    pass  # logging configured by composition root
-
-    config = TeacherRefinerConfig.from_config(args.config)
-    task = _build_teacher_task(config, args.config)
-
-    rows = load_candidates(args.results)
-    default_run_id, default_prompt_version = _parse_artifact_name(args.results)
-    run_id = args.run_id or default_run_id
-    prompt_version = args.prompt_version or default_prompt_version
-
-    refiner = ThesisRefiner(config, task, log_path=config.log_path)
-    records, totals = asyncio.run(refiner.run(rows))
-
-    artifact_path = write_refined_artifact(records, run_id, prompt_version, config.output_dir)
-    refiner._log("write_artifact", None, {"path": artifact_path, "records": len(records)})
-    refiner.print_summary(totals)
-    print(f"Artifact: {artifact_path}")
-
-
-if __name__ == "__main__":
-    main()

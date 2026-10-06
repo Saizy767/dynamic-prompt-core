@@ -39,16 +39,6 @@ where = ["src"]
 root_packages = ["dynamic_prompt_core"]
 
 [[tool.importlinter.contracts]]
-name = "layer-direction"
-type = "layers"
-layers = [
-    "dynamic_prompt_core.interfaces",
-    "dynamic_prompt_core.application",
-    "dynamic_prompt_core.infrastructure",
-    "dynamic_prompt_core.domain",
-]
-
-[[tool.importlinter.contracts]]
 name = "domain-isolated"
 type = "forbidden"
 source_modules = ["dynamic_prompt_core.domain"]

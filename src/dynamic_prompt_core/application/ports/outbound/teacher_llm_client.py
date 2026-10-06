@@ -1,8 +1,11 @@
+"""Outbound port: contract for teacher-model refinement calls."""
 from __future__ import annotations
 
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import Protocol, runtime_checkable
 
-T = TypeVar("T")
+from dynamic_prompt_core.domain.services.thesis_refinement import RefinementReview
+
+__all__ = ["RefinementReview", "TeacherLLMClient"]
 
 
 @runtime_checkable
@@ -10,29 +13,18 @@ class TeacherLLMClient(Protocol):
     """Outbound port: contract for teacher-model LLM calls.
 
     Distinct from LLMClient to allow independent configuration and swapping
-    of the teacher model used in Stage 4 refinement.
+    of the teacher model used in Stage 4 refinement. The implementation is
+    responsible for assembling the system prompt from its own configuration.
     """
 
-    async def classify(
+    async def review_theses(
         self,
         text: str,
-        model: type[T],
-        *,
-        system_prompt: str | None = None,
-        max_tokens: int = 128,
-        truncate_tokens: int = 300,
-    ) -> T | None:
-        """Classify a single text using the teacher model."""
-        ...
+        theses: list[str],
+    ) -> RefinementReview:
+        """Ask the teacher model to review candidate theses for a text.
 
-    async def extract_theses(
-        self,
-        text: str,
-        model: type[T],
-        *,
-        system_prompt: str | None = None,
-        max_tokens: int = 512,
-        truncate_tokens: int = 2000,
-    ) -> T | None:
-        """Extract theses from a single text using the teacher model."""
+        Returns a ``RefinementReview`` carrying the structured plan
+        (keep / reformulate / drop / add) plus latency and usage.
+        """
         ...

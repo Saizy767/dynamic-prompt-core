@@ -16,6 +16,7 @@ from dynamic_prompt_core.application.ports.outbound.run_repository import (
     RunRepository,
 )
 from dynamic_prompt_core.application.ports.outbound.teacher_llm_client import (
+    RefinementReview,
     TeacherLLMClient,
 )
 
@@ -25,6 +26,7 @@ __all__ = [
     "LLMClient",
     "Normalizer",
     "PromptRepository",
+    "RefinementReview",
     "RunRepository",
     "TeacherLLMClient",
 ]
