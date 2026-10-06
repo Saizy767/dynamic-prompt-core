@@ -97,4 +97,4 @@
 - [x] 13.5 Verify both entrypoints run: `python -m dynamic_prompt_core.interfaces.cli.main --help` and `python -m dynamic_prompt_core.interfaces.server.main --help`
 - [x] 13.6 Delete all 19 root-level `.py` files in one commit and verify `git status` shows only deletions and the tree from 1.2 remains
 - [x] 13.7 Re-run `lint-imports`, `mypy`, `ruff check`, `pytest` after deletion and verify all still pass
-- [ ] 13.8 Merge `migration/architecture` to main after acceptance criteria pass and verify `git log --oneline` shows the merge (needs explicit user request)
+- [x] 13.8 Merge `migration/architecture` to main after acceptance criteria pass and verify `git log --oneline` shows the merge (needs explicit user request)
