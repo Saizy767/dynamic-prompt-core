@@ -1,0 +1,19 @@
+# Core
+aiohttp>=3.9
+pydantic>=2.0
+transformers>=4.40
+numpy>=1.26
+tqdm>=4.66
+
+# Metrics
+scikit-learn>=1.4
+
+# Embeddings
+sentence-transformers>=2.7
+
+# Normalization
+pymorphy3>=2.0
+spacy>=3.7
+
+# Dataset (parquet support)
+pyarrow>=15.0
