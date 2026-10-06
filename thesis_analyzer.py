@@ -187,6 +187,7 @@ class ThesisEntry:
     selected: int = 0
     in_prompt: bool = False
     cluster_id: Optional[int] = None
+    source: str = "tiny"
 
     @property
     def precision(self) -> float:
@@ -410,6 +411,7 @@ def write_dump(
             "selected": entry.selected,
             "in_prompt": entry.in_prompt,
             "cluster_id": entry.cluster_id,
+            "source": entry.source,
         }
 
     clusters_data: Dict[str, Any] = {}
@@ -483,6 +485,7 @@ def load_dump(
             selected=data["selected"],
             in_prompt=data["in_prompt"],
             cluster_id=data["cluster_id"],
+            source=data.get("source", "tiny"),
         )
         bank.theses[norm] = entry
 

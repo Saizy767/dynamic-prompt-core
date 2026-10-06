@@ -280,3 +280,63 @@ output_dir = "data/results"
 # Path to the append-only refinement log (JSONL). Each operation appends one
 # line with timestamp, operation, example id, and details.
 log_path = "data/thesis_refiner.jsonl"
+
+# Stage 4 cross-task transfer configuration (cross_task_transfer.py).
+# This component transfers an optimized prompt's base layers, thesis collection,
+# and cluster centroids from a source task to a structurally compatible target
+# task, reformulates the task layer, clears the rules, and re-runs the
+# optimization cycle on the target dataset. All earlier stage components are
+# called via their public APIs.
+
+# Source task description (the task whose prompt is already optimized).
+# All fields are required.
+[cross_task_transfer.source_task]
+task_id = "sentiment-ru"
+dataset_path = "data/train.jsonl"
+num_classes = 2
+class_labels = ["positive", "negative"]
+metric = "macro_f1"
+
+# Target task description (the task to which the prompt is transferred).
+# All fields are required. The target dataset is read from [runner].dataset_artifact
+# at cycle time; dataset_path here is the declared source-of-truth for the task.
+[cross_task_transfer.target_task]
+task_id = "complaint-ru"
+dataset_path = "data/complaints.jsonl"
+num_classes = 2
+class_labels = ["complaint", "no-complaint"]
+metric = "macro_f1"
+
+[cross_task_transfer]
+# Path to the source cycle's output directory (artifacts from a completed run).
+# Required.
+source_artifacts_path = "data/results"
+# Path for target cycle artifacts (must be clean — no prior run's artifacts).
+# Required.
+target_artifacts_path = "data/results"
+# Path to the source prompt-version store JSON file. Required.
+source_store_path = "data/prompt_store.json"
+# Path to the target prompt-version store JSON file (created on transfer).
+# Required.
+target_store_path = "data/target_prompt_store.json"
+# Path to the source thesis-bank dump JSON file. Required.
+source_thesis_bank_path = "data/results/thesis_bank_cycle-20261005T120000Z_classify-v3_20261005T120000Z.json"
+# Maximum number of theses to transfer from the source collection. When unset
+# (commented), all source theses are transferred. When set, only the top N by
+# descending source frequency are transferred.
+# max_transfer_theses = 100
+# When true, cluster centroids from the source are transferred as initial
+# clustering points for the target. When false, the target starts with empty
+# clustering.
+transfer_clusters = true
+# When true, the target cycle is run twice — once with transfer and once from a
+# cold start — and the report compares metrics and rounds-to-stop. Disabled by
+# default because it doubles the target inference cost.
+compare_with_cold_start = false
+# Maximum number of rounds for the target optimization cycle.
+max_rounds_target = 5
+# Directory for transfer artifacts (transfer result, effectiveness report).
+output_dir = "data/results"
+# Path to the append-only transfer operation log (JSONL). Each operation
+# appends one line with timestamp, operation, task_id, and details.
+log_path = "data/cross_task_transfer.jsonl"
