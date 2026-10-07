@@ -37,6 +37,7 @@ where = ["src"]
 # --------------------------------------------------------------------------- #
 [tool.importlinter]
 root_packages = ["dynamic_prompt_core"]
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "domain-isolated"
@@ -46,6 +47,28 @@ forbidden_modules = [
     "dynamic_prompt_core.application",
     "dynamic_prompt_core.infrastructure",
     "dynamic_prompt_core.interfaces",
+]
+
+# domain stdlib-only allowlist: domain may import only the standard library
+# plus an explicit allowlist (currently empty). Any third-party import not on
+# the allowlist is a violation. This is forward-compatible — new LLM libraries
+# are automatically forbidden without adding them to a blacklist.
+[[tool.importlinter.contracts]]
+name = "domain-stdlib-only-allowlist"
+type = "forbidden"
+source_modules = ["dynamic_prompt_core.domain"]
+forbidden_modules = [
+    "transformers",
+    "aiohttp",
+    "torch",
+    "sentence_transformers",
+    "pydantic",
+    "numpy",
+    "sklearn",
+    "pymorphy3",
+    "spacy",
+    "pyarrow",
+    "tqdm",
 ]
 
 [[tool.importlinter.contracts]]
