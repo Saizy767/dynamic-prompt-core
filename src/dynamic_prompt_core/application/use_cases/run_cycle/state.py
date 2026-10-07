@@ -37,6 +37,7 @@ class CycleState:
     accepted_history: list[str] = field(default_factory=list)
     rollback_history: list[dict[str, Any]] = field(default_factory=list)
     run_id: str = ""
+    last_round_new_candidates: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-safe dict."""

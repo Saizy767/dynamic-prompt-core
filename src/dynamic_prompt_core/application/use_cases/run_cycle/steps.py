@@ -387,6 +387,7 @@ async def run_round(
     # Step 4: Select candidates
     _, candidate_queue = select_candidates(thesis_bank_path, config_path)
     state.candidate_queue = list(candidate_queue)
+    state.last_round_new_candidates = len(candidate_queue)
 
     # Steps 5–7: Compose, run, decide — retry on rollback
     decision = "rollback"

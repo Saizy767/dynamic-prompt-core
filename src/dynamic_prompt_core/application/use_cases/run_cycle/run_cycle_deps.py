@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from dynamic_prompt_core.application.ports.outbound.dataset_repository import (
     DatasetRepository,
@@ -22,6 +23,11 @@ from dynamic_prompt_core.application.ports.outbound.teacher_llm_client import (
     TeacherLLMClient,
 )
 
+if TYPE_CHECKING:
+    from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.deps import (
+        EvaluateStopCriteriaDeps,
+    )
+
 
 @dataclass(frozen=True)
 class RunCycleDeps:
@@ -29,6 +35,8 @@ class RunCycleDeps:
 
     Adding a field is a breaking change to the use case's interface.
     ``teacher_llm_client`` is optional (``None`` when refinement is disabled).
+    ``stop_criteria_deps`` is optional (``None`` when content-based stop
+    evaluation is disabled).
     """
 
     llm_client: LLMClient
@@ -38,3 +46,4 @@ class RunCycleDeps:
     embedding_client: EmbeddingClient
     normalizer: Normalizer
     teacher_llm_client: TeacherLLMClient | None = None
+    stop_criteria_deps: "EvaluateStopCriteriaDeps | None" = None

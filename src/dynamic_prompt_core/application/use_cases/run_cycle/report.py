@@ -26,6 +26,12 @@ VALID_STOP_REASONS = frozenset(
         "max_rollbacks_reached",
         "candidate_queue_exhausted",
         "unrecoverable_error",
+        "plateau_detected",
+        "metric_degradation",
+        "no_candidates_available",
+        "budget_exhausted",
+        "rule_stagnation",
+        "rollback_streak",
     }
 )
 

@@ -186,6 +186,19 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     except Exception as exc:
         log.debug("teacher client not configured: %s", exc)
 
+    stop_criteria_deps = None
+    try:
+        with open(config_path, "rb") as f:
+            toml_config = tomllib.load(f)
+        if "stop_criteria" in toml_config:
+            from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.deps import (
+                EvaluateStopCriteriaDeps,
+            )
+
+            stop_criteria_deps = EvaluateStopCriteriaDeps(run_repository=run_repo)
+    except Exception as exc:
+        log.debug("stop criteria not configured: %s", exc)
+
     return RunCycleDeps(
         llm_client=llm,  # type: ignore[arg-type]
         prompt_repository=store,
@@ -194,6 +207,7 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
         embedding_client=embedding_client,
         normalizer=normalizer,
         teacher_llm_client=teacher_llm_client,
+        stop_criteria_deps=stop_criteria_deps,
     )
 
 
@@ -298,6 +312,24 @@ async def main(argv: list[str] | None = None) -> int:
         cycle_config = type(cycle_config)(
             **{**cycle_config.__dict__, "max_rounds": rounds, "duration": duration_val}
         )
+
+    try:
+        from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.config import (
+            StopCriteriaConfig,
+        )
+
+        with open(config_path, "rb") as f:
+            toml_config = tomllib.load(f)
+        if "stop_criteria" in toml_config:
+            stop_criteria_config = StopCriteriaConfig.from_toml(config_path)
+            cycle_config = type(cycle_config)(
+                **{
+                    **cycle_config.__dict__,
+                    "stop_criteria_config": stop_criteria_config,
+                }
+            )
+    except Exception as exc:
+        log.debug("stop criteria config not loaded: %s", exc)
 
     run_input = RunCycleInput(
         config_path=config_path,

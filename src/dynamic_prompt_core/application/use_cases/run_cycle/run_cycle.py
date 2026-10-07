@@ -59,6 +59,24 @@ def check_stop(state: CycleState, config: CycleConfig) -> tuple[bool, str | None
     return False, None
 
 
+def _extract_metric_summary(metrics: dict[str, Any]) -> dict[str, float]:
+    """Extract ``accuracy``, ``macro_f1``, ``minority_f1`` from a metrics dict."""
+    f1 = metrics.get("f1", {})
+    return {
+        "accuracy": float(metrics.get("accuracy", 0.0)),
+        "macro_f1": float(f1.get("macro", 0.0)),
+        "minority_f1": float(f1.get("minority", 0.0)),
+    }
+
+
+def _extract_rule_set(state: CycleState) -> frozenset[str]:
+    """Extract the set of rule ids from the active prompt version."""
+    layers = state.active_version.layers
+    if layers is not None:
+        return frozenset(layers.rules)
+    return frozenset()
+
+
 def load_initial_state(
     deps: RunCycleDeps,
     config: CycleConfig,
@@ -155,6 +173,10 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
             log_path,
         )
 
+        metric_history: list[dict[str, float]] = []
+        decision_history: list[str] = []
+        rule_set_history: list[frozenset[str]] = []
+
         while True:
             should_stop, reason = check_stop(state, config)
             if should_stop:
@@ -166,6 +188,52 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
 
             if config.dump_state_after_each_round:
                 dump_state(state, deps.run_repository, output_dir)
+
+            if state.latest_report_path:
+                try:
+                    from dynamic_prompt_core.application.use_cases.run_cycle.report import (
+                        load_report,
+                    )
+
+                    report = load_report(state.latest_report_path)
+                    metrics_dev = report.get("metrics_dev_new") or report.get(
+                        "metrics_dev_active", {}
+                    )
+                    metric_history.append(_extract_metric_summary(metrics_dev))
+                    decision_history.append(str(report.get("decision", "rollback")))
+                except Exception as exc:
+                    log.debug("could not load report for history: %s", exc)
+            rule_set_history.append(_extract_rule_set(state))
+
+            if deps.stop_criteria_deps is not None:
+                from dynamic_prompt_core.application.ports.outbound.stop_criteria import (
+                    StopEvaluationContext,
+                )
+                from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria import (
+                    evaluate_stop_criteria,
+                )
+
+                stop_config = config.stop_criteria_config
+                ctx = StopEvaluationContext(
+                    round_counter=state.round_counter,
+                    rollback_counter=state.rollback_counter,
+                    max_consecutive_rollbacks=config.max_consecutive_rollbacks,
+                    candidate_queue_size=len(state.candidate_queue),
+                    new_candidates_found=state.last_round_new_candidates,
+                    metric_history=list(metric_history),
+                    decision_history=list(decision_history),
+                    rule_set_history=list(rule_set_history),
+                    total_teacher_tokens=0,
+                    run_id=state.run_id,
+                    log_path=log_path,
+                    config=stop_config,
+                )
+                stop_decision = await evaluate_stop_criteria(
+                    deps.stop_criteria_deps, ctx, output_dir=output_dir
+                )
+                if stop_decision.should_stop:
+                    stop_reason = stop_decision.reason or "plateau_detected"
+                    break
 
         final_dev_metrics: dict[str, Any] = {}
         final_holdout_metrics: dict[str, Any] = {}

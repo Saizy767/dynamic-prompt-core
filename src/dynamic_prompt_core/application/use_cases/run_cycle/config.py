@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.config import (
+        StopCriteriaConfig,
+    )
 
 DEFAULT_MAX_ROUNDS = 5
 DEFAULT_MAX_CONSECUTIVE_ROLLBACKS = 2
@@ -46,6 +51,7 @@ class CycleConfig:
     dump_state_after_each_round: bool = True
     use_teacher_refinement: bool = False
     duration: int | list[int] = 0
+    stop_criteria_config: "StopCriteriaConfig | None" = None
 
     def __post_init__(self) -> None:
         if isinstance(self.duration, list) and self.duration:
