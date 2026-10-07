@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -12,3 +13,4 @@ class RunCycleInput:
     dev_split: str = "dev"
     holdout_split: str = "holdout"
     resume_from: str | None = None
+    config: Any = None

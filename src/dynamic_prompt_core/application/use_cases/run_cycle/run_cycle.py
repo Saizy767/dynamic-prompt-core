@@ -1,9 +1,37 @@
+"""run_cycle: the central optimization loop use case.
+
+Threads the round counter, candidate queue, and rollback counter across
+rounds, calling the nine-step round sequence from ``steps.py``.  Produces
+per-round reports, a final summary, and reloadable state dumps.
+"""
+
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
 
 from dynamic_prompt_core.application.ports.inbound.run_cycle_input import RunCycleInput
-from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import RunCycleDeps
+from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
+from dynamic_prompt_core.application.use_cases.run_cycle.report import (
+    CycleOrchestratorError,
+    log_event,
+    write_summary,
+)
+from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
+    RunCycleDeps,
+)
+from dynamic_prompt_core.application.use_cases.run_cycle.state import (
+    CycleState,
+    dump_state,
+    load_state,
+)
+from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+from dynamic_prompt_core.domain.prompts.fixed import CLASSIFICATION_PROMPT_V0
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -17,10 +45,170 @@ class RunCycleResult:
     rollback_history: list[dict[str, str | int]]
 
 
+def check_stop(state: CycleState, config: CycleConfig) -> tuple[bool, str | None]:
+    """Check whether the cycle should stop.
+
+    Returns ``(should_stop, reason)``.
+    """
+    if state.round_counter >= config.max_rounds:
+        return True, "max_rounds_reached"
+    if state.rollback_counter >= config.max_consecutive_rollbacks:
+        return True, "max_rollbacks_reached"
+    if not state.candidate_queue and state.rollback_counter > 0:
+        return True, "candidate_queue_exhausted"
+    return False, None
+
+
+def load_initial_state(
+    deps: RunCycleDeps,
+    config: CycleConfig,
+    config_path: str,
+) -> CycleState:
+    """Load the initial cycle state.
+
+    Loads the active prompt via ``deps.prompt_repository`` (or v0 when no
+    active version exists) and the dataset via ``deps.dataset_repository``.
+    Raises ``CycleOrchestratorError`` when a required artifact is missing.
+    """
+    run_id = config.run_id or f"cycle-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+
+    active_version = CLASSIFICATION_PROMPT_V0
+    active_version_path = ""
+    try:
+        active_record = deps.prompt_repository.get_active()
+        version_str = str(active_record.get("version", "classify-v0"))
+        text = active_record.get("text", CLASSIFICATION_PROMPT_V0.text)
+        sha = active_record.get("hash", "")
+        active_version = type(CLASSIFICATION_PROMPT_V0)(
+            version=version_str,
+            layers=None,
+            text=text,
+            sha256=sha,
+        )
+        active_version_path = str(active_record.get("path", ""))
+    except Exception as exc:
+        log.debug("no active prompt in repository, using v0: %s", exc)
+
+    dataset_artifact = ""
+    try:
+        from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
+            RunnerConfig,
+        )
+
+        runner_config = RunnerConfig.from_config(config_path)
+        dataset_artifact = runner_config.dataset_artifact
+    except Exception:
+        pass
+
+    if dataset_artifact:
+        try:
+            deps.dataset_repository.load_artifact(dataset_artifact)
+        except Exception as exc:
+            raise CycleOrchestratorError(
+                f"dataset artifact not found at {dataset_artifact!r}: {exc}"
+            ) from exc
+    else:
+        raise CycleOrchestratorError(
+            "dataset artifact path is required (config [runner].dataset_artifact)"
+        )
+
+    return CycleState(
+        round_counter=0,
+        active_version=active_version,
+        active_version_path=active_version_path,
+        run_id=run_id,
+    )
+
+
 async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleResult:
     """Execute the optimization loop for a configured number of rounds.
 
     This use case receives all dependencies via the typed ``deps`` object.
     It does not instantiate infrastructure classes directly.
     """
-    raise NotImplementedError
+    config = run_input.config or CycleConfig.from_toml(run_input.config_path)
+    if run_input.max_rounds != config.max_rounds:
+        config = type(config)(**{**config.__dict__, "max_rounds": run_input.max_rounds})
+
+    output_dir = config.output_dir
+    os.makedirs(output_dir, exist_ok=True)
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    log_path = os.path.join(
+        output_dir,
+        f"cycle_log_{config.run_id or 'default'}_{ts}.jsonl",
+    )
+
+    all_changed_decisions: list[dict[str, Any]] = []
+    stop_reason = "unrecoverable_error"
+
+    try:
+        if run_input.resume_from:
+            state = load_state(run_input.resume_from)
+            log.info("resuming from round %d", state.round_counter)
+        else:
+            state = load_initial_state(deps, config, run_input.config_path)
+
+        log_event(
+            "cycle_start",
+            0,
+            {"run_id": state.run_id, "max_rounds": config.max_rounds},
+            log_path,
+        )
+
+        while True:
+            should_stop, reason = check_stop(state, config)
+            if should_stop:
+                stop_reason = reason or "max_rounds_reached"
+                break
+
+            state = await run_round(state, deps, config, run_input.config_path, log_path)
+            state.round_counter += 1
+
+            if config.dump_state_after_each_round:
+                dump_state(state, deps.run_repository, output_dir)
+
+        final_dev_metrics: dict[str, Any] = {}
+        final_holdout_metrics: dict[str, Any] = {}
+        try:
+            if state.latest_report_path:
+                from dynamic_prompt_core.application.use_cases.run_cycle.report import (
+                    load_report,
+                )
+
+                report = load_report(state.latest_report_path)
+                final_dev_metrics = report.get("metrics_dev_new") or report.get(
+                    "metrics_dev_active", {}
+                )
+                final_holdout_metrics = report.get("metrics_holdout_new") or report.get(
+                    "metrics_holdout_active", {}
+                )
+        except Exception as exc:
+            log.warning("could not load final metrics: %s", exc)
+
+        write_summary(
+            state,
+            final_dev_metrics,
+            final_holdout_metrics,
+            stop_reason,
+            all_changed_decisions,
+            state.run_id,
+            deps.run_repository,
+            output_dir,
+        )
+
+        log_event("stop", state.round_counter, {"reason": stop_reason}, log_path)
+
+        return RunCycleResult(
+            total_rounds=state.round_counter,
+            stop_reason=stop_reason,
+            final_active_version=state.active_version.version,
+            accepted_history=state.accepted_history,
+            rollback_history=state.rollback_history,
+        )
+
+    except CycleOrchestratorError:
+        raise
+    except Exception as exc:
+        log.exception("unrecoverable error during cycle execution")
+        log_event("error", 0, {"error": str(exc)}, log_path)
+        raise

@@ -1,15 +1,6 @@
-# Spec
+# Spec Delta
 
-## Purpose
-
-Drive the full optimization loop across a configured number of rounds,
-coordinating the baseline runner, metrics, thesis analyzer, rule-candidate
-selector, prompt composer, and version comparator. Maintain the round counter,
-candidate queue, and rollback state, produce per-round reports and a final
-summary, dump reloadable state after each round, and support resuming an
-interrupted cycle. This is the top-level entry point of the system.
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: Use case location
 `run_cycle` SHALL reside in `application/use_cases/run_cycle/`. The package
@@ -117,6 +108,8 @@ and resumability from a dumped state.
 #### Scenario: No server required
 - **WHEN** tests are run
 - **THEN** no inference server is required
+
+## MODIFIED Requirements
 
 ### Requirement: Load configuration
 `run_cycle` SHALL accept cycle configuration as a typed object (`CycleConfig`)

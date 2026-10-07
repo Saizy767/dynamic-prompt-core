@@ -174,6 +174,15 @@ output_dir = "data/results"
 # version, runs it on dev, and decides accept/rollback. The cycle stops when
 # the round counter reaches this limit.
 max_rounds = 5
+# Number of dataset rows to process per round.
+#   0  — process all rows in the split (default).
+#   N  — process N rows in every round.
+#   [N1, N2, ...] — run len(list) rounds (overrides max_rounds), round i
+#                   processes list[i] rows.
+# Examples:
+#   duration = 100          # 5 rounds, 100 rows each
+#   duration = [50, 100, 200]  # 3 rounds: 50, 100, 200 rows
+duration = [10, 50, 100,]
 # Maximum number of consecutive rollbacks before the cycle stops. The counter
 # is reset on acceptance. Delegates to version_comparator's check_stop.
 max_consecutive_rollbacks = 2
@@ -201,6 +210,14 @@ dump_state_after_each_round = true
 report_format = "json"
 # Directory for cycle artifacts (reports, summaries, state dumps, cycle log).
 output_dir = "data/results"
+# Metric used for the accept/rollback decision. One of: accuracy, macro_f1,
+# minority_f1, weighted_f1. Delegates to version_comparator's decide().
+decision_metric = "macro_f1"
+# Tie-breaker metric when decision_metric is equal between versions.
+tie_breaker_metric = "minority_f1"
+# When true, run stage4-teacher-refinement between the baseline run and thesis
+# analysis each round. Requires [teacher].endpoint to be configured.
+use_teacher_refinement = false
 
 # Stage 3 prompt version store configuration (prompt_store.py).
 # This is the single source of truth for prompt version lifecycle: persisting
