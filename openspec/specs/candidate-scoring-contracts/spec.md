@@ -372,24 +372,6 @@ caller SHALL be migrated to `CandidateScorer` in this change.
 - **WHEN** the existing classification test suite is run
 - **THEN** all tests pass
 
-### Requirement: No concrete scorer or inference introduced
-This change SHALL NOT introduce a concrete `CandidateScorer` implementation,
-logits extraction, tokenization, model loading, batching, score calibration, or
-classification aggregation. No inference library SHALL be introduced into the
-domain or application port.
-
-#### Scenario: No concrete scorer
-- **WHEN** this change is completed
-- **THEN** no concrete `CandidateScorer` implementation exists in infrastructure
-
-#### Scenario: No logits or tokenization
-- **WHEN** this change is completed
-- **THEN** no logits extraction, tokenization, or batching code is introduced
-
-#### Scenario: No inference library in domain or port
-- **WHEN** the domain or port is inspected
-- **THEN** no inference library is introduced
-
 ### Requirement: Port boundary architecture validation
 An import-linter contract SHALL validate the `CandidateScorer` port boundary:
 `application.ports` SHALL NOT import `infrastructure` or `interfaces`, directly
