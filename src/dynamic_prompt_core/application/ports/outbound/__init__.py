@@ -1,6 +1,10 @@
 """Outbound ports: contracts for external dependencies."""
 from __future__ import annotations
 
+from dynamic_prompt_core.application.ports.outbound.candidate_scorer import (
+    CandidateScorer,
+    validate_unique_candidates,
+)
 from dynamic_prompt_core.application.ports.outbound.dataset_repository import (
     DatasetRepository,
 )
@@ -21,6 +25,7 @@ from dynamic_prompt_core.application.ports.outbound.teacher_llm_client import (
 )
 
 __all__ = [
+    "CandidateScorer",
     "DatasetRepository",
     "EmbeddingClient",
     "LLMClient",
@@ -29,4 +34,5 @@ __all__ = [
     "RefinementReview",
     "RunRepository",
     "TeacherLLMClient",
+    "validate_unique_candidates",
 ]

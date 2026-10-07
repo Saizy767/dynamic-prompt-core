@@ -79,6 +79,18 @@ forbidden_modules = [
     "dynamic_prompt_core.interfaces",
 ]
 
+# application ports must not depend on infrastructure or interfaces, directly
+# or indirectly. This is the dependency-inversion boundary: ports remain pure
+# abstractions that infrastructure implements, not the other way around.
+[[tool.importlinter.contracts]]
+name = "application-ports-isolated"
+type = "forbidden"
+source_modules = ["dynamic_prompt_core.application.ports"]
+forbidden_modules = [
+    "dynamic_prompt_core.infrastructure",
+    "dynamic_prompt_core.interfaces",
+]
+
 [[tool.importlinter.contracts]]
 name = "infrastructure-isolated"
 type = "forbidden"
