@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import time
 import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -27,8 +28,12 @@ from typing import Any
 
 import aiohttp
 
-from dynamic_prompt_core.application.schemas import ClassificationResult, ThesisExtraction
+from dynamic_prompt_core.application.ports.outbound.candidate_scorer import CandidateScorer
+from dynamic_prompt_core.application.schemas import ThesisExtraction
+from dynamic_prompt_core.application.services.classification_policy import ClassificationPolicy
 from dynamic_prompt_core.application.services.metrics import metrics as metrics_module
+from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
+from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.dataset import Record
 from dynamic_prompt_core.domain.prompts import (
     CLASSIFICATION_PROMPT_V0,
@@ -51,6 +56,7 @@ DEFAULT_CHECKPOINT_INTERVAL = 1
 DEFAULT_OUTPUT_DIR = "data/results"
 DEFAULT_LANGUAGE = "ru"
 DEFAULT_PROMPT_VERSION = "classify-v0"
+DEFAULT_CANDIDATES: list[str] = ["0", "1"]
 
 _RUNNER_STATUS_OK = "ok"
 _RUNNER_STATUS_REPAIRED = "repaired"
@@ -69,12 +75,14 @@ class RunnerConfig:
     language: str = DEFAULT_LANGUAGE
     prompt_version: str = DEFAULT_PROMPT_VERSION
     dataset_artifact: str = ""
+    candidates: list[str] = field(default_factory=lambda: list(DEFAULT_CANDIDATES))
 
     @classmethod
     def from_config(cls, config_path: str = DEFAULT_CONFIG_PATH) -> RunnerConfig:
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
         r = config.get("runner", {})
+        c = config.get("classification", {})
         return cls(
             concurrency=int(r.get("concurrency", DEFAULT_CONCURRENCY)),
             checkpoint_interval=int(r.get("checkpoint_interval", DEFAULT_CHECKPOINT_INTERVAL)),
@@ -82,6 +90,7 @@ class RunnerConfig:
             language=r.get("language", DEFAULT_LANGUAGE),
             prompt_version=r.get("prompt_version", DEFAULT_PROMPT_VERSION),
             dataset_artifact=r.get("dataset_artifact", ""),
+            candidates=list(c.get("candidates", DEFAULT_CANDIDATES)),
         )
 
 
@@ -94,7 +103,8 @@ class ResultRow:
     text: str
     true_label: int
     predicted_decision: int | None = None
-    confidence: int | None = None
+    selected_candidate: str | None = None
+    judgment_scores: dict[str, float] = field(default_factory=dict)
     theses_raw: list[str] = field(default_factory=list)
     theses_norm: list[str] = field(default_factory=list)
     extract_status: str = _RUNNER_STATUS_NOT_ATTEMPTED
@@ -102,7 +112,6 @@ class ResultRow:
     extract_latency_ms: float = 0.0
     classify_latency_ms: float = 0.0
     raw_extract: str | None = None
-    raw_classify: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -110,7 +119,8 @@ class ResultRow:
             "text": self.text,
             "true_label": self.true_label,
             "predicted_decision": self.predicted_decision,
-            "confidence": self.confidence,
+            "selected_candidate": self.selected_candidate,
+            "judgment_scores": self.judgment_scores,
             "theses_raw": self.theses_raw,
             "theses_norm": self.theses_norm,
             "extract_status": self.extract_status,
@@ -118,7 +128,6 @@ class ResultRow:
             "extract_latency_ms": self.extract_latency_ms,
             "classify_latency_ms": self.classify_latency_ms,
             "raw_extract": self.raw_extract,
-            "raw_classify": self.raw_classify,
         }
 
 
@@ -162,12 +171,18 @@ class BaselineRunner:
         task: AsyncTask,
         config: RunnerConfig,
         split: str,
+        scorer: CandidateScorer,
+        policy: ClassificationPolicy,
+        candidates: list[Candidate],
         run_id: str | None = None,
         dataset_artifact: str | None = None,
         duration: int | None = None,
         classify_prompt: PromptArtifact | None = None,
     ) -> None:
         self._task = task
+        self._scorer = scorer
+        self._policy = policy
+        self._candidates = candidates
         self._config = config
         self._split = split
         self._run_id = run_id or f"run-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
@@ -318,49 +333,59 @@ class BaselineRunner:
                     status=ResponseStatus.UNEXPECTED_SHAPE,
                     error=str(exc),
                 )
-            try:
-                classify_cr = await self._task.classify_detailed(
-                    session,
-                    example.text,
-                    ClassificationResult,
-                    system_prompt=self._classify_prompt.text,
-                    true_val=example.label,
-                )
-            except Exception as exc:
-                log.exception("classify crashed for id=%s: %s", example.id, exc)
-                classify_cr = CallResult(
-                    parsed=None,
-                    raw_content=None,
-                    latency_ms=0.0,
-                    parse_status=None,
-                    status=ResponseStatus.UNEXPECTED_SHAPE,
-                    error=str(exc),
-                )
 
             extract_status, extract_parsed = _map_call_status(extract_cr, ThesisExtraction)
-            classify_status, classify_parsed = _map_call_status(classify_cr, ClassificationResult)
 
             theses_raw = list(extract_parsed.theses) if extract_parsed else []
             theses_norm = normalize_theses(theses_raw, self._language) if theses_raw else []
+
+            classify_start = time.monotonic()
+            try:
+                judgments = await self._scorer.score(example.text, self._candidates)
+                classification = self._policy.classify(judgments)
+                classify_status = _RUNNER_STATUS_OK
+                selected_candidate = classification.selected.value
+                try:
+                    predicted_decision = int(classification.selected.value)
+                except (ValueError, TypeError):
+                    predicted_decision = None
+                judgment_scores = {j.candidate.value: j.score for j in classification.judgments}
+            except CandidateScoringError as exc:
+                log.exception("candidate scoring failed for id=%s: %s", example.id, exc)
+                classify_status = _RUNNER_STATUS_FAILED
+                predicted_decision = None
+                selected_candidate = None
+                judgment_scores = {}
+            except Exception as exc:
+                log.exception("classify crashed for id=%s: %s", example.id, exc)
+                classify_status = _RUNNER_STATUS_FAILED
+                predicted_decision = None
+                selected_candidate = None
+                judgment_scores = {}
+            classify_latency_ms = (time.monotonic() - classify_start) * 1000
+
+            if classify_status == _RUNNER_STATUS_OK:
+                self._stats["ok"] += 1
+            else:
+                self._stats["parse_failed"] += 1
 
             row = ResultRow(
                 id=example.id,
                 text=example.text,
                 true_label=example.label,
-                predicted_decision=(classify_parsed.decision if classify_parsed else None),
-                confidence=(classify_parsed.confidence if classify_parsed else None),
+                predicted_decision=predicted_decision,
+                selected_candidate=selected_candidate,
+                judgment_scores=judgment_scores,
                 theses_raw=theses_raw,
                 theses_norm=theses_norm,
                 extract_status=extract_status,
                 classify_status=classify_status,
                 extract_latency_ms=extract_cr.latency_ms,
-                classify_latency_ms=classify_cr.latency_ms,
+                classify_latency_ms=classify_latency_ms,
                 raw_extract=extract_cr.raw_content,
-                raw_classify=classify_cr.raw_content,
             )
 
             self._update_stats(extract_cr, extract_status)
-            self._update_stats(classify_cr, classify_status)
 
             results[index] = row
             await self._checkpoint_write(row)
@@ -453,6 +478,39 @@ async def _main_async(args: argparse.Namespace) -> None:
     output_dir = config.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
+    with open(args.config, "rb") as f:
+        llm_config = tomllib.load(f).get("llm", {})
+    model_path = llm_config.get("model_path", "model")
+
+    from transformers import AutoModelForCausalLM
+
+    from dynamic_prompt_core.application.services.classification_policy import (
+        ArgmaxClassificationPolicy,
+    )
+    from dynamic_prompt_core.infrastructure.llm.scoring.candidate_scorer import (
+        LLMLogitCandidateScorer,
+    )
+    from dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer import LogitScorer
+    from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
+        TorchBatchedCausalLMAdapter,
+    )
+    from dynamic_prompt_core.infrastructure.llm.scoring.prompt_builder import (
+        ScoringPromptBuilder,
+    )
+    from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
+        HuggingFaceBatchTokenizerAdapter,
+    )
+
+    hf_model = AutoModelForCausalLM.from_pretrained(model_path)
+    scorer = LLMLogitCandidateScorer(
+        prompt_builder=ScoringPromptBuilder(),
+        tokenizer=HuggingFaceBatchTokenizerAdapter(model_path),
+        model=TorchBatchedCausalLMAdapter(hf_model),
+        logit_scorer=LogitScorer(),
+    )
+    policy = ArgmaxClassificationPolicy()
+    candidates = [Candidate(v) for v in config.candidates]
+
     cycles = args.cycles
     for cycle in range(1, cycles + 1):
         cycle_run_id = run_id if cycles == 1 else f"{run_id}-c{cycle}"
@@ -474,6 +532,9 @@ async def _main_async(args: argparse.Namespace) -> None:
             task=task,
             config=config,
             split=args.split,
+            scorer=scorer,
+            policy=policy,
+            candidates=candidates,
             run_id=cycle_run_id,
             dataset_artifact=args.dataset_artifact,
             duration=args.duration,

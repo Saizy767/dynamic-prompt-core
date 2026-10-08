@@ -353,25 +353,6 @@ infrastructure scoring.
 - **WHEN** `infrastructure` is inspected
 - **THEN** it may import `application.ports` but does not import application use cases or `interfaces`
 
-### Requirement: Existing classification behavior preserved
-The existing generative classification pipeline SHALL continue to operate
-unchanged. `BaselineRunner`, `AsyncTask.classify_detailed`, `LLMClient.classify`,
-`ClassificationResult`, existing parsing and validation behavior, `run_cycle`,
-and existing classification tests SHALL continue to work unchanged. No existing
-caller SHALL be migrated to `CandidateScorer` in this change.
-
-#### Scenario: Generative pipeline unchanged
-- **WHEN** this change is completed
-- **THEN** the generative classification pipeline continues to operate unchanged
-
-#### Scenario: No caller migrated
-- **WHEN** this change is completed
-- **THEN** no existing caller is migrated to `CandidateScorer`
-
-#### Scenario: Existing tests pass
-- **WHEN** the existing classification test suite is run
-- **THEN** all tests pass
-
 ### Requirement: Port boundary architecture validation
 An import-linter contract SHALL validate the `CandidateScorer` port boundary:
 `application.ports` SHALL NOT import `infrastructure` or `interfaces`, directly

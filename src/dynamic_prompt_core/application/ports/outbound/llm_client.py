@@ -9,31 +9,6 @@ T = TypeVar("T")
 class LLMClient(Protocol):
     """Outbound port: contract for LLM inference calls."""
 
-    async def classify(
-        self,
-        text: str,
-        model: type[T],
-        *,
-        system_prompt: str | None = None,
-        max_tokens: int = 128,
-        truncate_tokens: int = 300,
-    ) -> T | None:
-        """Classify a single text and return a parsed model instance."""
-        ...
-
-    async def classify_many(
-        self,
-        texts: list[str],
-        model: type[T],
-        *,
-        system_prompt: str | None = None,
-        max_tokens: int = 128,
-        truncate_tokens: int = 300,
-        concurrency: int = 32,
-    ) -> list[T | None]:
-        """Classify a batch of texts and return parsed model instances."""
-        ...
-
     async def extract_theses(
         self,
         text: str,

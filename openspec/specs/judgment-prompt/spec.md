@@ -275,22 +275,4 @@ scaling, generated explanations, or generated JSON.
 - **WHEN** the judgment prompt is used with multiple candidates
 - **THEN** no softmax, normalization, calibration, or temperature scaling is introduced across candidates
 
-### Requirement: Existing generative classification preserved
-The existing generative classification pipeline SHALL continue to operate
-unchanged. The generative classification prompt, `LLMClient.classify`,
-`ClassificationResult`, `BaselineRunner`, existing parsing and validation
-behavior, and existing classification tests SHALL continue to work unchanged.
-The judgment prompt is introduced alongside the generative path, not as a
-replacement for it.
 
-#### Scenario: Generative pipeline unchanged
-- **WHEN** this change is completed
-- **THEN** the generative classification pipeline continues to operate unchanged
-
-#### Scenario: Generative prompt unchanged
-- **WHEN** this change is completed
-- **THEN** the existing generative classification prompt remains unchanged
-
-#### Scenario: Existing tests pass
-- **WHEN** the existing classification test suite is run
-- **THEN** all tests pass

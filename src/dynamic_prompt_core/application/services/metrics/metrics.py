@@ -35,7 +35,6 @@ REQUIRED_FIELDS = (
     "text",
     "true_label",
     "predicted_decision",
-    "confidence",
     "classify_status",
     "theses_norm",
 )

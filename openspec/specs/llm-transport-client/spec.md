@@ -26,14 +26,11 @@ method that parses the raw response into a validated model instance.
 - **THEN** the `RawResponse` includes `content`, `model`, `latency_ms`, `status`, `attempts`, `finish_reason`, `usage`, `http_status`, and `error`
 
 ### Requirement: Call-type wrappers
-The client SHALL provide `classify`, `extract_theses`, `classify_many`, and
-`extract_theses_many` methods that pass a `call_type` identifier into log
-entries and use per-call defaults for `system_prompt`, `max_tokens`, and
-`truncate_tokens`.
-
-#### Scenario: classify uses classification defaults
-- **WHEN** `classify` is called without explicit `truncate_tokens` or `max_tokens`
-- **THEN** it uses defaults appropriate for classification (truncate_tokens=300, max_tokens=128)
+The client SHALL provide `extract_theses` and `extract_theses_many` methods
+that pass a `call_type` identifier into log entries and use per-call defaults
+for `system_prompt`, `max_tokens`, and `truncate_tokens`. The client SHALL NOT
+provide `classify` or `classify_many` methods; classification is performed
+through the candidate-scoring architecture, not through generative LLM calls.
 
 #### Scenario: extract_theses uses extraction defaults
 - **WHEN** `extract_theses` is called without explicit `truncate_tokens` or `max_tokens`
@@ -45,7 +42,7 @@ entries and use per-call defaults for `system_prompt`, `max_tokens`, and
 
 #### Scenario: call_type appears in log
 - **WHEN** any wrapper is called and logging is enabled
-- **THEN** the log entry's `call_type` field is `"classify"` or `"extract_theses"` matching the wrapper called
+- **THEN** the log entry's `call_type` field is `"extract_theses"` matching the wrapper called
 
 ### Requirement: Structured jsonl logging
 The client SHALL log one jsonl line per logical request (not per retry attempt)
@@ -111,8 +108,8 @@ The client SHALL NOT retry on parse validation failures when `temperature` is
 
 ### Requirement: Truncation with per-call limits
 The client SHALL truncate input text to a token limit that can be specified per
-call, with different defaults for `classify` and `extract_theses`, and SHALL log
-whether truncation occurred.
+call, with defaults appropriate for `extract_theses`, and SHALL log whether
+truncation occurred.
 
 #### Scenario: Text within limit not truncated
 - **WHEN** the input text is within the token limit
@@ -146,11 +143,13 @@ generic OpenAI adapter.
 ### Requirement: Smoke test readiness gate
 The project SHALL include a `smoke_test.py` script that verifies the transport
 layer end-to-end against a running server and exits with code 0 on success,
-non-zero on failure.
+non-zero on failure. The smoke test SHALL exercise `extract_theses` calls and
+SHALL NOT exercise `classify` calls, because classification is performed through
+candidate scoring, not generative LLM calls.
 
 #### Scenario: Successful smoke test
 - **WHEN** the server is running and `smoke_test.py` is executed
-- **THEN** it performs classify and extract_theses calls, checks the jsonl log, verifies analyze_raw composition, checks determinism, and exits 0
+- **THEN** it performs extract_theses calls, checks the jsonl log, verifies analyze_raw composition, checks determinism, and exits 0
 
 #### Scenario: Smoke test on unreachable server
 - **WHEN** the server is not running and `smoke_test.py` is executed
@@ -164,9 +163,8 @@ non-zero on failure.
 The client SHALL provide a `CallResult` return type that bundles the parsed
 model instance, the raw response content, `latency_ms`, `parse_status`,
 transport `status`, `finish_reason`, `error`, and `truncated` for a single call.
-The existing `classify` / `extract_theses` / `classify_many` /
-`extract_theses_many` wrappers SHALL remain unchanged and continue to return the
-parsed model or `None`.
+The existing `extract_theses` / `extract_theses_many` wrappers SHALL remain
+unchanged and continue to return the parsed model or `None`.
 
 #### Scenario: CallResult carries parsed and raw
 - **WHEN** a rich-result call succeeds with valid JSON matching the schema
@@ -177,38 +175,34 @@ parsed model or `None`.
 - **THEN** the `CallResult` has `parsed=None`, `raw_content` holding the raw string, and `parse_status` set to the failure category
 
 #### Scenario: Existing wrappers unchanged
-- **WHEN** `classify` or `extract_theses` is called as before
+- **WHEN** `extract_theses` is called as before
 - **THEN** it returns the parsed model or `None` with no change to its signature or behavior
 
 ### Requirement: Rich-result single-call methods
-The client SHALL provide `classify_detailed` and `extract_theses_detailed`
-methods that return a `CallResult` and write one jsonl log entry per request
-through the existing `_LogWriter` when a `log_path` is configured. These methods
-SHALL use the same per-call defaults (`max_tokens`, `truncate_tokens`) as their
-non-detailed siblings.
-
-#### Scenario: classify_detailed logs and returns rich result
-- **WHEN** `classify_detailed` is called with a `log_path` configured
-- **THEN** exactly one jsonl log entry is written and a `CallResult` is returned
+The client SHALL provide `extract_theses_detailed` method that returns a
+`CallResult` and writes one jsonl log entry per request through the existing
+`_LogWriter` when a `log_path` is configured. This method SHALL use the same
+per-call defaults (`max_tokens`, `truncate_tokens`) as its non-detailed sibling.
+The client SHALL NOT provide `classify_detailed`.
 
 #### Scenario: extract_theses_detailed uses extraction defaults
 - **WHEN** `extract_theses_detailed` is called without explicit `truncate_tokens` or `max_tokens`
 - **THEN** it uses extraction defaults (`truncate_tokens=2000`, `max_tokens=512`)
 
 ### Requirement: Rich-result batch methods
-The client SHALL provide `classify_many_detailed` and
-`extract_theses_many_detailed` methods that return a list of `CallResult` in the
-same order as the input texts, execute with a configurable concurrency limit, and
-log every request when a `log_path` is configured.
+The client SHALL provide `extract_theses_many_detailed` method that returns a
+list of `CallResult` in the same order as the input texts, executes with a
+configurable concurrency limit, and logs every request when a `log_path` is
+configured. The client SHALL NOT provide `classify_many_detailed`.
 
 #### Scenario: Batch returns rich results in order
-- **WHEN** `classify_many_detailed` is called with N texts
+- **WHEN** `extract_theses_many_detailed` is called with N texts
 - **THEN** it returns N `CallResult` objects whose order matches the input texts
 
 #### Scenario: Batch concurrency honored
-- **WHEN** `classify_many_detailed` is called with `concurrency=4`
+- **WHEN** `extract_theses_many_detailed` is called with `concurrency=4`
 - **THEN** no more than 4 requests execute simultaneously
 
 #### Scenario: Batch logs every request
-- **WHEN** `classify_many_detailed` is called with a `log_path` configured on N texts
+- **WHEN** `extract_theses_many_detailed` is called with a `log_path` configured on N texts
 - **THEN** exactly N jsonl log entries are written

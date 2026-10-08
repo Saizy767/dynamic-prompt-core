@@ -18,16 +18,6 @@ from dynamic_prompt_core.domain.models.dataset import Dataset, Record
 class MockLLMClient:
     """Mock LLM client port."""
 
-    async def classify(
-        self, text, model, *, system_prompt="", max_tokens=512, truncate_tokens=None
-    ):
-        return {"decision": 1, "confidence": 80}
-
-    async def classify_many(
-        self, texts, model, *, system_prompt="", max_tokens=512, truncate_tokens=None
-    ):
-        return [await self.classify(t, model, system_prompt=system_prompt) for t in texts]
-
     async def extract_theses(
         self, text, model, *, system_prompt="", max_tokens=512, truncate_tokens=None
     ):

@@ -19,8 +19,7 @@ class Classification:
     The constructor accepts ``judgments`` as any iterable of ``Judgment`` and
     stores ``tuple(judgments)``.
 
-    ``Classification`` is distinct from the legacy generative
-    ``ClassificationResult`` schema and does not replace it.
+    ``Classification`` is the sole application-level classification result.
     """
 
     selected: Candidate

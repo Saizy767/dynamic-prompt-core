@@ -361,26 +361,6 @@ class AsyncTask:
     # ------------------------------------------------------------------ #
     #  Public API — call-type wrappers
     # ------------------------------------------------------------------ #
-    async def classify(
-        self,
-        session: aiohttp.ClientSession,
-        text: str,
-        model: type[T],
-        *,
-        system_prompt: str | None = None,
-        max_tokens: int = 128,
-        truncate_tokens: int = 300,
-        **kwargs: Any,
-    ) -> T | None:
-        return await self.analyze(
-            session, text, model,
-            call_type="classify",
-            system_prompt=system_prompt,
-            max_tokens=max_tokens,
-            truncate_tokens=truncate_tokens,
-            **kwargs,
-        )
-
     async def extract_theses(
         self,
         session: aiohttp.ClientSession,
@@ -398,28 +378,6 @@ class AsyncTask:
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             truncate_tokens=truncate_tokens,
-            **kwargs,
-        )
-
-    async def classify_detailed(
-        self,
-        session: aiohttp.ClientSession,
-        text: str,
-        model: type[T],
-        *,
-        system_prompt: str | None = None,
-        max_tokens: int = 128,
-        truncate_tokens: int = 300,
-        true_val: Any | None = None,
-        **kwargs: Any,
-    ) -> CallResult:
-        return await self._analyze_detailed(
-            session, text, model,
-            call_type="classify",
-            system_prompt=system_prompt,
-            max_tokens=max_tokens,
-            truncate_tokens=truncate_tokens,
-            true_val=true_val,
             **kwargs,
         )
 
@@ -497,25 +455,6 @@ class AsyncTask:
                 progress_bar.close()
 
         return results
-
-    async def classify_many(
-        self,
-        texts: list[str],
-        model: type[T],
-        concurrency: int = 50,
-        show_progress: bool = False,
-        *,
-        system_prompt: str | None = None,
-        max_tokens: int = 128,
-        truncate_tokens: int = 300,
-    ) -> list[T | None]:
-        return await self.analyze_many(
-            texts, model, concurrency, show_progress,
-            call_type="classify",
-            system_prompt=system_prompt,
-            max_tokens=max_tokens,
-            truncate_tokens=truncate_tokens,
-        )
 
     async def extract_theses_many(
         self,
@@ -596,25 +535,6 @@ class AsyncTask:
                 progress_bar.close()
 
         return cast("list[CallResult]", results)
-
-    async def classify_many_detailed(
-        self,
-        texts: list[str],
-        model: type[T],
-        concurrency: int = 50,
-        show_progress: bool = False,
-        *,
-        system_prompt: str | None = None,
-        max_tokens: int = 128,
-        truncate_tokens: int = 300,
-    ) -> list[CallResult]:
-        return await self._analyze_many_detailed(
-            texts, model, concurrency, show_progress,
-            call_type="classify",
-            system_prompt=system_prompt,
-            max_tokens=max_tokens,
-            truncate_tokens=truncate_tokens,
-        )
 
     async def extract_theses_many_detailed(
         self,

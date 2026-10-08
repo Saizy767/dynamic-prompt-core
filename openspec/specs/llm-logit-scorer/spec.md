@@ -791,9 +791,9 @@ The application SHALL NOT branch on whether batching is supported.
 The `CandidateScorer` port, `ClassifyInput`, `Classification`, `Judgment`,
 and `ClassificationPolicy` SHALL remain unchanged. No model, tokenizer,
 tensor, padding, attention mask, or batch structure details SHALL leak into
-domain or application. The existing generative classification path SHALL
-continue to operate unchanged. Batch scoring SHALL be additive to the
-infrastructure layer only.
+domain or application. Batch scoring SHALL be additive to the infrastructure
+layer only. The generative classification path SHALL NOT exist; candidate
+scoring is the sole classification mechanism.
 
 #### Scenario: Port contract unchanged
 - **WHEN** the `CandidateScorer` port is inspected after batch scoring is introduced
@@ -803,6 +803,6 @@ infrastructure layer only.
 - **WHEN** the domain and application layers are inspected
 - **THEN** they contain no token IDs, padding, attention masks, tensor shapes, or batch structures
 
-#### Scenario: Generative classification path unchanged
-- **WHEN** batch scoring is introduced
-- **THEN** the existing generative classification pipeline continues to operate unchanged
+#### Scenario: No generative classification path
+- **WHEN** the codebase is inspected for generative classification
+- **THEN** no `classify_detailed`, `ClassificationResult`, or generative classification fallback exists

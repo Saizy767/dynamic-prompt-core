@@ -56,6 +56,12 @@ seed = 42
 # between 0 and 1.
 holdout_ratio = 0.2
 
+# Classification candidate configuration.
+# The candidate set used by the baseline runner for candidate-scoring
+# classification. Each value becomes a Candidate for scoring and policy.
+[classification]
+candidates = ["0", "1"]
+
 # Stage 1 baseline runner configuration (runner.py).
 # asyncTask.py and dataset.py ignore this section.
 [runner]

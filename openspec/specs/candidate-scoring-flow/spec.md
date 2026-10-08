@@ -16,8 +16,8 @@ SHALL associate the selected `Candidate` with the full judgment set from which
 the decision was derived, stored as a `tuple[Judgment, ...]` so that the
 judgment sequence is deeply immutable. `Classification` SHALL NOT expose logits,
 token IDs, tokenizer state, model objects, provider response objects, prompt
-text, or transport metadata. `Classification` is distinct from the legacy
-generative `ClassificationResult` schema and does not replace it.
+text, or transport metadata. `Classification` is the sole application-level
+classification result; no generative `ClassificationResult` schema exists.
 
 #### Scenario: Classification associates selected candidate and judgments
 - **WHEN** a classification is created from a selected candidate and its judgments
@@ -31,9 +31,9 @@ generative `ClassificationResult` schema and does not replace it.
 - **WHEN** a classification is inspected
 - **THEN** it exposes no logits, token IDs, tokenizer state, model objects, prompt text, or transport metadata
 
-#### Scenario: Classification distinct from legacy result
-- **WHEN** the new classification flow produces a decision
-- **THEN** the result is a `Classification`, not a legacy `ClassificationResult`
+#### Scenario: Classification is the sole classification result
+- **WHEN** the classification flow produces a decision
+- **THEN** the result is a `Classification` and no `ClassificationResult` type exists in the codebase
 
 ### Requirement: Classification domain isolation
 `Classification` SHALL be usable by importing only domain modules and the Python
@@ -219,38 +219,6 @@ for enforcing application-level candidate-set semantics.
 #### Scenario: Infrastructure not responsible for candidate-set semantics
 - **WHEN** the scorer is invoked
 - **THEN** it is not responsible for application-level candidate-set validation
-
-### Requirement: Existing generative classification preserved
-The existing generative classification pipeline SHALL continue to operate
-unchanged. `LLMClient.classify`, `AsyncTask.classify_detailed`,
-`ClassificationResult`, `BaselineRunner`, existing parsing and validation
-behavior, and existing classification tests SHALL continue to work unchanged.
-No existing caller SHALL be migrated to the new scoring-classification flow in
-this change. The new flow is additive and structurally distinct from the
-generative path; no compatibility layer SHALL make the new scorer produce a
-legacy `ClassificationResult`. The new flow SHALL be implemented and
-independently testable but SHALL NOT be wired into any existing production
-caller; existing production callers remain on the legacy generative path.
-
-#### Scenario: Generative pipeline unchanged
-- **WHEN** this change is completed
-- **THEN** the generative classification pipeline continues to operate unchanged
-
-#### Scenario: No caller migrated
-- **WHEN** this change is completed
-- **THEN** no existing caller is migrated to the new scoring-classification flow
-
-#### Scenario: New flow not wired into existing callers
-- **WHEN** this change is completed
-- **THEN** the new flow is implemented and independently testable but no existing production caller invokes it
-
-#### Scenario: No compatibility layer to legacy result
-- **WHEN** the new flow is inspected
-- **THEN** no adapter makes the scorer or policy produce a legacy `ClassificationResult`
-
-#### Scenario: Existing tests pass
-- **WHEN** the existing classification test suite is run
-- **THEN** all tests pass
 
 ### Requirement: Scoring flow dependency direction
 The dependency graph SHALL remain `domain` ← `application` ← `infrastructure`.
