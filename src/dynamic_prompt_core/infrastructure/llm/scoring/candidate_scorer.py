@@ -4,6 +4,11 @@ Translates application-level scoring semantics into model mechanics: prompt
 construction, tokenization, model inference, logit extraction, and score
 calculation.  All model internals remain behind the ``CandidateScorer`` port
 boundary.
+
+Batch scoring evaluates all candidates from one ``score()`` invocation through
+a single batched model forward pass.  The application sees only
+``await scorer.score(text, candidates)`` and cannot tell whether batching
+occurred.
 """
 from __future__ import annotations
 
@@ -16,13 +21,13 @@ from dynamic_prompt_core.domain.models.judgment import Judgment
 from dynamic_prompt_core.infrastructure.llm.scoring.errors import LLMScoringError
 from dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer import LogitScorer
 from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
-    CausalLanguageModel,
+    BatchedCausalLanguageModel,
 )
 from dynamic_prompt_core.infrastructure.llm.scoring.prompt_builder import (
     ScoringPromptBuilder,
 )
 from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
-    TokenizerAdapter,
+    BatchTokenizerAdapter,
 )
 
 log = logging.getLogger(__name__)
@@ -39,8 +44,8 @@ class LLMLogitCandidateScorer:
     def __init__(
         self,
         prompt_builder: ScoringPromptBuilder,
-        tokenizer: TokenizerAdapter,
-        model: CausalLanguageModel,
+        tokenizer: BatchTokenizerAdapter,
+        model: BatchedCausalLanguageModel,
         logit_scorer: LogitScorer,
     ) -> None:
         self._prompt_builder = prompt_builder
@@ -58,42 +63,35 @@ class LLMLogitCandidateScorer:
         Returns exactly one ``Judgment`` per candidate in input order.
         Raises ``CandidateScoringError`` if any candidate cannot be evaluated.
         """
-        judgments: list[Judgment] = []
-        for candidate in candidates:
-            judgment = await self._score_one(text, candidate)
-            judgments.append(judgment)
-        return judgments
-
-    async def _score_one(self, text: str, candidate: Candidate) -> Judgment:
         try:
             prefix = self._prompt_builder.build_prefix(text)
-            candidate_text = self._prompt_builder.build_candidate(candidate)
+            candidate_texts = [
+                self._prompt_builder.build_candidate(c) for c in candidates
+            ]
+            prefixes = [prefix] * len(candidates)
 
-            prefix_token_ids = self._tokenizer.encode(prefix)
-            candidate_token_ids = self._tokenizer.encode(candidate_text)
-            prefix_token_count = len(prefix_token_ids)
+            batch = self._tokenizer.encode_batch(prefixes, candidate_texts)
 
-            full_sequence = prefix_token_ids + candidate_token_ids
-
-            sequence_logits = await asyncio.to_thread(
-                self._model.forward, full_sequence
+            batched_logits = await asyncio.to_thread(
+                self._model.forward_batch,
+                batch.input_ids,
+                batch.attention_mask,
             )
 
-            score = self._logit_scorer.score(
-                prefix_token_count=prefix_token_count,
-                candidate_token_ids=candidate_token_ids,
-                sequence_logits=sequence_logits,
+            scores = self._logit_scorer.score_batch(
+                prefix_token_counts=batch.prefix_token_counts,
+                candidate_token_ids=batch.candidate_token_ids,
+                batched_logits=batched_logits,
             )
 
-            return Judgment(candidate=candidate, score=score)
+            return [
+                Judgment(candidate=candidate, score=score)
+                for candidate, score in zip(candidates, scores, strict=True)
+            ]
 
         except LLMScoringError as exc:
-            raise CandidateScoringError(
-                f"scoring failed for candidate {candidate.value!r}: {exc}"
-            ) from exc
+            raise CandidateScoringError(f"batch scoring failed: {exc}") from exc
         except CandidateScoringError:
             raise
         except Exception as exc:
-            raise CandidateScoringError(
-                f"scoring failed for candidate {candidate.value!r}: {exc}"
-            ) from exc
+            raise CandidateScoringError(f"batch scoring failed: {exc}") from exc

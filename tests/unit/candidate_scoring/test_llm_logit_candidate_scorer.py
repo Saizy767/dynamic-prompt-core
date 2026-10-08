@@ -14,21 +14,64 @@ from dynamic_prompt_core.infrastructure.llm.scoring.candidate_scorer import (
 from dynamic_prompt_core.infrastructure.llm.scoring.errors import LLMScoringError
 from dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer import LogitScorer
 from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
+    BatchedLogits,
     SequenceLogits,
 )
 from dynamic_prompt_core.infrastructure.llm.scoring.prompt_builder import (
     ScoringPromptBuilder,
 )
+from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
+    BatchTokenization,
+)
 
 
 class StubTokenizer:
-    """Deterministic tokenizer: maps each character to its ord value."""
+    """Deterministic tokenizer: maps each character to its ord value.
+
+    Supports both single-sequence ``encode`` and batch ``encode_batch`` with
+    right padding.
+    """
+
+    PAD_TOKEN_ID = 0
 
     def encode(self, text: str) -> list[int]:
         return [ord(ch) for ch in text]
 
     def decode(self, token_ids: list[int]) -> str:
         return "".join(chr(tid) for tid in token_ids)
+
+    def encode_batch(
+        self,
+        prefixes: list[str],
+        candidates: list[str],
+    ) -> BatchTokenization:
+        all_input_ids: list[list[int]] = []
+        all_attention_masks: list[list[int]] = []
+        all_prefix_counts: list[int] = []
+        all_candidate_ids: list[list[int]] = []
+
+        for prefix, candidate in zip(prefixes, candidates, strict=True):
+            prefix_ids = [ord(ch) for ch in prefix]
+            candidate_ids = [ord(ch) for ch in candidate]
+            full_ids = prefix_ids + candidate_ids
+
+            all_input_ids.append(full_ids)
+            all_attention_masks.append([1] * len(full_ids))
+            all_prefix_counts.append(len(prefix_ids))
+            all_candidate_ids.append(candidate_ids)
+
+        max_len = max(len(ids) for ids in all_input_ids) if all_input_ids else 0
+        for i in range(len(all_input_ids)):
+            pad_len = max_len - len(all_input_ids[i])
+            all_input_ids[i] = all_input_ids[i] + [self.PAD_TOKEN_ID] * pad_len
+            all_attention_masks[i] = all_attention_masks[i] + [0] * pad_len
+
+        return BatchTokenization(
+            input_ids=all_input_ids,
+            attention_mask=all_attention_masks,
+            prefix_token_counts=all_prefix_counts,
+            candidate_token_ids=all_candidate_ids,
+        )
 
 
 def _valid_logprobs(p0: float) -> list[float]:
@@ -49,17 +92,33 @@ class StubModel:
 
     For a sequence of N tokens, returns N positions of ``VOCAB_SIZE``-token
     logits with a uniform distribution.  Any token ID in [0, VOCAB_SIZE) is
-    valid.
+    valid.  Supports both single-sequence ``forward`` and batch
+    ``forward_batch``.
     """
 
     def __init__(self) -> None:
         self._lp = _uniform_logprobs()
         self.forward_calls: list[list[int]] = []
+        self.forward_batch_calls: list[tuple[list[list[int]], list[list[int]]]] = []
 
     def forward(self, input_ids: list[int]) -> SequenceLogits:
         self.forward_calls.append(list(input_ids))
         n = len(input_ids)
         return SequenceLogits(logits=tuple(tuple(self._lp) for _ in range(n)))
+
+    def forward_batch(
+        self,
+        input_ids: list[list[int]],
+        attention_mask: list[list[int]],
+    ) -> BatchedLogits:
+        self.forward_batch_calls.append((list(input_ids), list(attention_mask)))
+        items: list[SequenceLogits] = []
+        for seq in input_ids:
+            n = len(seq)
+            items.append(
+                SequenceLogits(logits=tuple(tuple(self._lp) for _ in range(n)))
+            )
+        return BatchedLogits(items=tuple(items))
 
 
 class StubModelWithProb:
@@ -68,6 +127,7 @@ class StubModelWithProb:
     def __init__(self, prob_for_token: dict[int, float]) -> None:
         self._prob_for_token = prob_for_token
         self.forward_calls: list[list[int]] = []
+        self.forward_batch_calls: list[tuple[list[list[int]], list[list[int]]]] = []
 
     def forward(self, input_ids: list[int]) -> SequenceLogits:
         self.forward_calls.append(list(input_ids))
@@ -79,6 +139,23 @@ class StubModelWithProb:
             positions.append(_valid_logprobs(p))
         return SequenceLogits(logits=tuple(tuple(p) for p in positions))
 
+    def forward_batch(
+        self,
+        input_ids: list[list[int]],
+        attention_mask: list[list[int]],
+    ) -> BatchedLogits:
+        self.forward_batch_calls.append((list(input_ids), list(attention_mask)))
+        items: list[SequenceLogits] = []
+        for seq in input_ids:
+            n = len(seq)
+            positions: list[list[float]] = []
+            for i in range(n):
+                token_id = seq[i] if i < n else -1
+                p = self._prob_for_token.get(token_id, 0.5)
+                positions.append(_valid_logprobs(p))
+            items.append(SequenceLogits(logits=tuple(tuple(p) for p in positions)))
+        return BatchedLogits(items=tuple(items))
+
 
 class FailingModel:
     """Model double that always raises."""
@@ -89,9 +166,20 @@ class FailingModel:
     def forward(self, input_ids: list[int]) -> SequenceLogits:
         raise self._exc
 
+    def forward_batch(
+        self,
+        input_ids: list[list[int]],
+        attention_mask: list[list[int]],
+    ) -> BatchedLogits:
+        raise self._exc
+
 
 class PartialFailingModel:
-    """Model double that fails on a specific sequence."""
+    """Model double that fails on a specific sequence.
+
+    In batch mode, fails if any batch item's unpadded sequence matches
+    ``fail_seq``.
+    """
 
     def __init__(self, fail_seq: tuple[int, ...], exc: Exception) -> None:
         self._fail_seq = fail_seq
@@ -102,6 +190,19 @@ class PartialFailingModel:
         if tuple(input_ids) == self._fail_seq:
             raise self._exc
         return self._stub.forward(input_ids)
+
+    def forward_batch(
+        self,
+        input_ids: list[list[int]],
+        attention_mask: list[list[int]],
+    ) -> BatchedLogits:
+        for ids, mask in zip(input_ids, attention_mask, strict=True):
+            unpadded = tuple(
+                tid for tid, m in zip(ids, mask, strict=True) if m == 1
+            )
+            if unpadded == self._fail_seq:
+                raise self._exc
+        return self._stub.forward_batch(input_ids, attention_mask)
 
 
 def _make_scorer(
@@ -168,7 +269,7 @@ class TestMultipleCandidates:
         judgments = await scorer.score("text", candidates)
 
         assert len(judgments) == 3
-        assert len(model.forward_calls) == 3  # sequential evaluation
+        assert len(model.forward_batch_calls) == 1  # batch evaluation
 
 
 class TestCandidateValueVerbatim:

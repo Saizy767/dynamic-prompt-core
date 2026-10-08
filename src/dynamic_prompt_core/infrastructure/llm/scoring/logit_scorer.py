@@ -22,6 +22,7 @@ from collections.abc import Sequence
 
 from dynamic_prompt_core.infrastructure.llm.scoring.errors import LLMScoringError
 from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
+    BatchedLogits,
     SequenceLogits,
 )
 
@@ -81,3 +82,43 @@ class LogitScorer:
             )
 
         return result
+
+    def score_batch(
+        self,
+        prefix_token_counts: list[int],
+        candidate_token_ids: list[list[int]],
+        batched_logits: BatchedLogits,
+    ) -> list[float]:
+        """Score all batch items using causal alignment and mean log-probability.
+
+        Returns one score per batch item.  Padding tokens never contribute
+        because each item's ``prefix_token_count`` and ``candidate_token_ids``
+        are tracked independently from the unpadded sequence.  If any item
+        produces an invalid score (NaN, infinity), raises ``LLMScoringError``
+        for the entire batch — no partial results.
+        """
+        if len(prefix_token_counts) != len(candidate_token_ids):
+            raise LLMScoringError(
+                f"prefix_token_counts ({len(prefix_token_counts)}) and "
+                f"candidate_token_ids ({len(candidate_token_ids)}) must have "
+                "equal length"
+            )
+        if len(prefix_token_counts) != len(batched_logits.items):
+            raise LLMScoringError(
+                f"batch items ({len(prefix_token_counts)}) do not match "
+                f"logits items ({len(batched_logits.items)})"
+            )
+
+        scores: list[float] = []
+        for i, (prefix_count, cand_ids) in enumerate(
+            zip(prefix_token_counts, candidate_token_ids, strict=True)
+        ):
+            item_logits = batched_logits.items[i]
+            score = self.score(
+                prefix_token_count=prefix_count,
+                candidate_token_ids=cand_ids,
+                sequence_logits=item_logits,
+            )
+            scores.append(score)
+
+        return scores
