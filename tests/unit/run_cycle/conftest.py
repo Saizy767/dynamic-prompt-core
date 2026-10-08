@@ -8,11 +8,16 @@ from typing import Any
 
 import pytest
 
+from dynamic_prompt_core.application.services.classification_policy import (
+    ArgmaxClassificationPolicy,
+)
 from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
     RunCycleDeps,
 )
+from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.dataset import Dataset, Record
+from dynamic_prompt_core.domain.models.judgment import Judgment
 
 
 class MockLLMClient:
@@ -136,6 +141,23 @@ class MockTeacherLLMClient:
         )
 
 
+class FakeCandidateScorer:
+    """Fake CandidateScorer returning deterministic judgments.
+
+    Each candidate receives a fixed score based on its position so the real
+    ArgmaxClassificationPolicy always selects the first candidate.
+    """
+
+    async def score(self, text: str, candidates: list[Candidate]) -> list[Judgment]:
+        return [
+            Judgment(candidate=c, score=float(len(candidates) - i))
+            for i, c in enumerate(candidates)
+        ]
+
+
+FAKE_CANDIDATES: tuple[Candidate, ...] = (Candidate("0"), Candidate("1"))
+
+
 @pytest.fixture
 def mock_llm_client():
     return MockLLMClient()
@@ -181,6 +203,9 @@ def build_mock_deps():
             dataset_repository=MockDatasetRepository(),
             embedding_client=MockEmbeddingClient(),
             normalizer=MockNormalizer(),
+            candidate_scorer=FakeCandidateScorer(),
+            classification_policy=ArgmaxClassificationPolicy(),
+            candidates=FAKE_CANDIDATES,
             teacher_llm_client=teacher,
         )
 

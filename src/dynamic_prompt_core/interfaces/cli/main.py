@@ -149,7 +149,14 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     This is the composition root: it creates concrete infrastructure
     implementations and passes them through the typed dependency object.
     """
+    from dynamic_prompt_core.application.services.classification_policy import (
+        ArgmaxClassificationPolicy,
+    )
+    from dynamic_prompt_core.domain.models.candidate import Candidate
     from dynamic_prompt_core.infrastructure.llm import AsyncTask
+    from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
+        build_candidate_scorer,
+    )
     from dynamic_prompt_core.infrastructure.storage import PromptStore, PromptStoreConfig
     from dynamic_prompt_core.infrastructure.storage.run_repository import (
         FileRunRepository,
@@ -162,6 +169,16 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     normalizer = _NormalizerAdapter()
     dataset_repo = _DatasetRepositoryAdapter()
     embedding_client = _EmbeddingClientAdapter()
+
+    with open(config_path, "rb") as f:
+        toml_config = tomllib.load(f)
+    model_path = toml_config.get("llm", {}).get("model_path", "model")
+    scorer = build_candidate_scorer(model_path)
+    policy = ArgmaxClassificationPolicy()
+    candidates = tuple(
+        Candidate(v)
+        for v in toml_config.get("classification", {}).get("candidates", ["0", "1"])
+    )
 
     teacher_llm_client = None
     try:
@@ -206,6 +223,9 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
         dataset_repository=dataset_repo,
         embedding_client=embedding_client,
         normalizer=normalizer,
+        candidate_scorer=scorer,
+        classification_policy=policy,
+        candidates=candidates,
         teacher_llm_client=teacher_llm_client,
         stop_criteria_deps=stop_criteria_deps,
     )

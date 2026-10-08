@@ -122,3 +122,144 @@ def test_run_round_executes_steps_and_writes_report(
         updated = asyncio.run(run_round(state, deps, cycle_config, "config.toml", log_path))
 
     assert updated.latest_report_path == "report.json"
+
+
+def test_run_active_on_dev_threads_scorer_policy_candidates(build_mock_deps):
+    """run_active_on_dev passes scorer, policy, and candidates from deps to BaselineRunner."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
+        run_active_on_dev,
+    )
+    from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
+
+    deps = build_mock_deps()
+    state = CycleState(run_id="test-run")
+    config = CycleConfig(max_rounds=1, run_id="test-run")
+
+    captured: dict = {}
+
+    class _CapturingRunner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            return [], "fake.jsonl"
+
+    with patch(f"{STEPS}.BaselineRunner", _CapturingRunner), patch(
+        f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()
+    ):
+        asyncio.run(run_active_on_dev(state, deps, config, "config.toml"))
+
+    assert captured["scorer"] is deps.candidate_scorer
+    assert captured["policy"] is deps.classification_policy
+    assert list(deps.candidates) == captured["candidates"]
+
+
+def test_run_new_on_dev_threads_scorer_policy_candidates(build_mock_deps):
+    """run_new_on_dev passes scorer, policy, and candidates from deps to BaselineRunner."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
+        run_new_on_dev,
+    )
+    from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
+
+    deps = build_mock_deps()
+    config = CycleConfig(max_rounds=1, run_id="test-run")
+
+    captured: dict = {}
+
+    class _CapturingRunner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            return [], "fake.jsonl"
+
+    with patch(f"{STEPS}.BaselineRunner", _CapturingRunner), patch(
+        f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()
+    ):
+        asyncio.run(
+            run_new_on_dev(
+                CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"
+            )
+        )
+
+    assert captured["scorer"] is deps.candidate_scorer
+    assert captured["policy"] is deps.classification_policy
+    assert list(deps.candidates) == captured["candidates"]
+
+
+def test_run_holdout_threads_scorer_policy_candidates(build_mock_deps):
+    """run_holdout passes scorer, policy, and candidates from deps to BaselineRunner."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_holdout
+    from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
+
+    deps = build_mock_deps()
+    config = CycleConfig(max_rounds=1, run_id="test-run")
+
+    captured: dict = {}
+
+    class _CapturingRunner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            return [], "fake.jsonl"
+
+    with patch(f"{STEPS}.BaselineRunner", _CapturingRunner), patch(
+        f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()
+    ), patch(f"{STEPS}.compute_dev_metrics", return_value={"accuracy": 0.5}):
+        asyncio.run(
+            run_holdout(
+                CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"
+            )
+        )
+
+    assert captured["scorer"] is deps.candidate_scorer
+    assert captured["policy"] is deps.classification_policy
+    assert list(deps.candidates) == captured["candidates"]
+
+
+def test_all_runners_receive_same_scorer_and_policy_instances(build_mock_deps):
+    """All three BaselineRunner constructions during a round receive the same
+    scorer and policy object instances from RunCycleDeps."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
+        run_active_on_dev,
+        run_holdout,
+        run_new_on_dev,
+    )
+    from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
+
+    deps = build_mock_deps()
+    state = CycleState(run_id="test-run")
+    config = CycleConfig(max_rounds=1, run_id="test-run")
+
+    captured_list: list[dict] = []
+
+    class _CapturingRunner:
+        def __init__(self, **kwargs):
+            captured_list.append(kwargs)
+
+        async def run(self):
+            return [], "fake.jsonl"
+
+    with patch(f"{STEPS}.BaselineRunner", _CapturingRunner), patch(
+        f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()
+    ), patch(f"{STEPS}.compute_dev_metrics", return_value={"accuracy": 0.5}):
+        asyncio.run(run_active_on_dev(state, deps, config, "config.toml"))
+        asyncio.run(
+            run_new_on_dev(
+                CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"
+            )
+        )
+        asyncio.run(
+            run_holdout(
+                CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"
+            )
+        )
+
+    assert len(captured_list) == 3
+    scorers = [c["scorer"] for c in captured_list]
+    policies = [c["policy"] for c in captured_list]
+    candidates = [c["candidates"] for c in captured_list]
+    assert all(s is scorers[0] for s in scorers)
+    assert all(p is policies[0] for p in policies)
+    assert all(c == candidates[0] for c in candidates)

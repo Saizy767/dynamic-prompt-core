@@ -482,32 +482,14 @@ async def _main_async(args: argparse.Namespace) -> None:
         llm_config = tomllib.load(f).get("llm", {})
     model_path = llm_config.get("model_path", "model")
 
-    from transformers import AutoModelForCausalLM
-
     from dynamic_prompt_core.application.services.classification_policy import (
         ArgmaxClassificationPolicy,
     )
-    from dynamic_prompt_core.infrastructure.llm.scoring.candidate_scorer import (
-        LLMLogitCandidateScorer,
-    )
-    from dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer import LogitScorer
-    from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
-        TorchBatchedCausalLMAdapter,
-    )
-    from dynamic_prompt_core.infrastructure.llm.scoring.prompt_builder import (
-        ScoringPromptBuilder,
-    )
-    from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
-        HuggingFaceBatchTokenizerAdapter,
+    from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
+        build_candidate_scorer,
     )
 
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path)
-    scorer = LLMLogitCandidateScorer(
-        prompt_builder=ScoringPromptBuilder(),
-        tokenizer=HuggingFaceBatchTokenizerAdapter(model_path),
-        model=TorchBatchedCausalLMAdapter(hf_model),
-        logit_scorer=LogitScorer(),
-    )
+    scorer = build_candidate_scorer(model_path)
     policy = ArgmaxClassificationPolicy()
     candidates = [Candidate(v) for v in config.candidates]
 

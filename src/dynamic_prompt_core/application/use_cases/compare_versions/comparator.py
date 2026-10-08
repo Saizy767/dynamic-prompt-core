@@ -125,6 +125,11 @@ def load_active_version(
 # --------------------------------------------------------------------------- #
 #  Run new version on dev
 # --------------------------------------------------------------------------- #
+def _load_model_path(config_path: str) -> str:
+    with open(config_path, "rb") as f:
+        return str(tomllib.load(f).get("llm", {}).get("model_path", "model"))
+
+
 async def _run_version_async(
     prompt_artifact: PromptArtifact,
     config_path: str,
@@ -134,11 +139,18 @@ async def _run_version_async(
     run_id: str,
 ) -> str:
     """Construct a BaselineRunner with a custom classify_prompt and run it."""
+    from dynamic_prompt_core.application.services.classification_policy import (
+        ArgmaxClassificationPolicy,
+    )
     from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
         BaselineRunner,
         RunnerConfig,
     )
+    from dynamic_prompt_core.domain.models.candidate import Candidate
     from dynamic_prompt_core.infrastructure.llm import AsyncTask
+    from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
+        build_candidate_scorer,
+    )
 
     runner_config = RunnerConfig.from_config(config_path)
 
@@ -158,6 +170,11 @@ async def _run_version_async(
         task=task,
         config=runner_config,
         split=split,
+        scorer=build_candidate_scorer(
+            _load_model_path(config_path)
+        ),
+        policy=ArgmaxClassificationPolicy(),
+        candidates=[Candidate(v) for v in runner_config.candidates],
         run_id=run_id,
         dataset_artifact=dataset_artifact,
         classify_prompt=prompt_artifact,
