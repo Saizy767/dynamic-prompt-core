@@ -45,6 +45,142 @@ class TestScoringPromptBuilder:
         full = self.builder.build("input text", candidate)
         assert full == self.builder.build_prefix("input text") + "sports"
 
+    def test_prefix_contains_semantic_criteria(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "Evaluate how well the candidate" in prefix
+
+    def test_prefix_contains_relevance_criteria(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "content of the text" in prefix
+
+    def test_no_json_instruction_in_prefix(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "JSON" not in prefix
+
+    def test_no_confidence_instruction_in_prefix(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "confidence" not in prefix
+
+    def test_no_decision_instruction_in_prefix(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "decision" not in prefix
+
+    def test_no_reply_with_instruction_in_prefix(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "Reply with" not in prefix
+
+    def test_no_json_instruction_in_full_prompt(self) -> None:
+        full = self.builder.build("input text", Candidate("sports"))
+        assert "JSON" not in full
+
+    def test_no_confidence_instruction_in_full_prompt(self) -> None:
+        full = self.builder.build("input text", Candidate("sports"))
+        assert "confidence" not in full
+
+    def test_no_decision_instruction_in_full_prompt(self) -> None:
+        full = self.builder.build("input text", Candidate("sports"))
+        assert "decision" not in full
+
+    def test_no_reply_with_instruction_in_full_prompt(self) -> None:
+        full = self.builder.build("input text", Candidate("sports"))
+        assert "Reply with" not in full
+
+    def test_candidate_with_spaces_preserved_in_build(self) -> None:
+        full = self.builder.build("input text", Candidate("  sports  "))
+        assert full.endswith("  sports  ")
+
+    def test_candidate_with_mixed_case_preserved_in_build(self) -> None:
+        full = self.builder.build("input text", Candidate("Sports"))
+        assert full.endswith("Sports")
+
+    def test_candidate_with_punctuation_preserved_in_build(self) -> None:
+        full = self.builder.build("input text", Candidate("billing / payments"))
+        assert full.endswith("billing / payments")
+
+    def test_candidate_with_unicode_preserved_in_build(self) -> None:
+        full = self.builder.build("input text", Candidate("分类"))
+        assert full.endswith("分类")
+
+    def test_prefix_candidate_boundary_maintained(self) -> None:
+        candidate = Candidate("sports")
+        text = "input text"
+        full = self.builder.build(text, candidate)
+        assert full == self.builder.build_prefix(text) + self.builder.build_candidate(candidate)
+
+    def test_candidate_is_final_textual_component(self) -> None:
+        candidate = Candidate("sports")
+        full = self.builder.build("input text", candidate)
+        assert full.endswith("sports")
+        prefix = self.builder.build_prefix("input text")
+        assert prefix.endswith("Candidate: ")
+        assert full == prefix + "sports"
+
+
+class TestJudgmentPromptSemantics:
+    """Verify semantic requirements from CLASSIFICATION_PROMPT_V0 are represented."""
+
+    def setup_method(self) -> None:
+        self.builder = ScoringPromptBuilder()
+
+    def test_prompt_contains_task_framing_for_candidate_evaluation(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "evaluate" in prefix.lower()
+        assert "candidate" in prefix.lower()
+        assert "matches" in prefix.lower()
+
+    def test_prompt_contains_relevance_criteria_based_on_content(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "content of the text" in prefix
+        assert "hashtags" in prefix
+
+    def test_prompt_contains_metaphorical_handling(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "metaphorically" in prefix
+
+    def test_prompt_contains_ambiguity_handling(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "ambiguous" in prefix
+
+    def test_prompt_contains_factual_match_criteria(self) -> None:
+        prefix = self.builder.build_prefix("some input")
+        assert "Factual statements" in prefix
+
+    def test_no_json_output_phrase(self) -> None:
+        full = self.builder.build("input text", Candidate("sports"))
+        assert "Reply with a single JSON object" not in full
+
+    def test_no_decision_field(self) -> None:
+        full = self.builder.build("input text", Candidate("sports"))
+        assert "decision" not in full
+
+    def test_no_confidence_field(self) -> None:
+        full = self.builder.build("input text", Candidate("sports"))
+        assert "confidence" not in full
+
+    def test_no_no_markdown_phrase(self) -> None:
+        full = self.builder.build("input text", Candidate("sports"))
+        assert "No markdown" not in full
+
+    def test_candidate_specific_prompts_are_distinct(self) -> None:
+        text = "The user wants to cancel their subscription."
+        candidates = [
+            Candidate("subscription cancellation"),
+            Candidate("password reset"),
+            Candidate("billing inquiry"),
+        ]
+        prompts = [self.builder.build(text, c) for c in candidates]
+        assert len(set(prompts)) == 3
+
+    def test_each_prompt_contains_exactly_one_candidate(self) -> None:
+        text = "The user wants to cancel their subscription."
+        candidates = [Candidate("alpha"), Candidate("beta"), Candidate("gamma")]
+        prompts = [self.builder.build(text, c) for c in candidates]
+        for i, prompt in enumerate(prompts):
+            assert candidates[i].value in prompt
+            for j, other in enumerate(candidates):
+                if i != j:
+                    assert other.value not in prompt
+
 
 class TestTokenizerAdapterProtocol:
     def test_is_a_typing_protocol(self) -> None:
