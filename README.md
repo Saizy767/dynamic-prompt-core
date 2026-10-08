@@ -24,14 +24,18 @@
 Слои упорядочены по стабильности — от неизменяемых к динамическим. Это
 сохраняет prefix-кэш на inference-сервере.
 
-Модель работает при `temperature=0` и возвращает структурированный вывод:
+Модель работает при `temperature=0`. Классификация выполняется через
+candidate scoring: модель оценивает каждый явный кандидат (класс) независимо,
+а приложение выбирает финальную классификацию через политику.
 
-- `decision` — 0 или 1
-- `reasoning` — список коротких пунктов
+```
+CandidateScorer.score(text, candidates) → Judgment[]
+    → ClassificationPolicy.classify(judgments) → Classification
+```
 
-Reasoning маленькой модели шумный и является пост-хок рационализацией. Поэтому
-он используется не поштучно, а через частотный анализ по группам: правильные
-`decision` против неправильных.
+Оценка кандидата — это mean candidate-token log-probability: ранжирующий
+сигнал, а не вероятность или confidence. Модель не генерирует JSON-ответ
+и не выбирает класс сама.
 
 ## Архитектура
 
@@ -39,18 +43,33 @@ Reasoning маленькой модели шумный и является по�
 
 ```
 src/dynamic_prompt_core/
-  domain/            — модели без сторонних зависимостей (PromptArtifact, Dataset, Record)
+  domain/            — модели без сторонних зависимостей (Candidate, Judgment, Classification, Dataset, Record)
   application/       — use cases и порты
-    ports/           — интерфейсы (LLMClient, PromptRepository, RunRepository, ...)
-    use_cases/       — run_cycle, run_baseline, analyze_theses, compose_prompt, ...
-    services/        — metrics, clustering (чистая логика)
-  infrastructure/    — конкретные реализации портов (AsyncTask, PromptStore, FileRunRepository)
+    ports/           — интерфейсы (CandidateScorer, LLMClient, PromptRepository, ...)
+    use_cases/       — run_cycle, run_baseline, classify_input, analyze_theses, compose_prompt, ...
+    services/        — ClassificationPolicy, metrics, clustering (чистая логика)
+  infrastructure/    — конкретные реализации портов (LLMLogitCandidateScorer, AsyncTask, PromptStore)
   interfaces/        — CLI и сервер (composition root)
 ```
 
 Зависимости направлены внутрь: `domain` не зависит ни от кого, `application`
 зависит от портов, `infrastructure` реализует порты, `interfaces` собирает
 всё вместе в composition root.
+
+### Candidate scoring
+
+Классификация использует архитектуру candidate scoring, а не генеративный
+вывод. Инфраструктура оценивает кандидатов через logit-скоринг:
+
+```
+ScoringPromptBuilder → BatchTokenizerAdapter → BatchedCausalLanguageModel
+    → LogitScorer → Judgment[]
+```
+
+Приложение передаёт набор кандидатов (`Candidate`) в `CandidateScorer.score()`,
+получает `Judgment[]` и передаёт их в `ClassificationPolicy.classify()`, которая
+возвращает `Classification`. `ArgmaxClassificationPolicy` выбирает кандидата с
+наивысшей оценкой; ties разрешаются по порядку входа.
 
 ## Цикл оптимизации
 
@@ -135,7 +154,9 @@ duration = [50, 100, 200]
 
 ### Stage 1: Baseline
 
-- **run_baseline** — прогон датасета через модель с чекпоинтами и resume.
+- **run_baseline** — прогон датасета через модель: thesis extraction через
+  `extract_theses_detailed` + классификация через candidate scoring
+  (`CandidateScorer` → `ClassificationPolicy`), с чекпоинтами и resume.
 - **metrics** — accuracy, precision/recall/F1, confusion matrix, minority-class
   F1, распределение предсказаний, bias detection.
 - **thesis-analyzer** — сбор тезисов из reasoning, нормализация, эмбеддинги,
@@ -168,7 +189,8 @@ duration = [50, 100, 200]
 - aiohttp
 - pydantic v2
 - numpy
-- доступ к llama.cpp или vLLM серверу по OpenAI-совместимому API
+- torch + transformers (candidate scoring via logit-scoring)
+- доступ к llama.cpp или vLLM серверу по OpenAI-совместимому API (thesis extraction)
 
 ## Статические проверки
 
