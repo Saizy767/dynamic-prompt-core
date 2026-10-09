@@ -116,3 +116,31 @@ class TestClassifyInput:
 
         assert result1.selected == Candidate("b")
         assert result2.selected == Candidate("a")
+
+    async def test_end_to_end_path_produces_classification_from_scores(self) -> None:
+        """The full path text → score → judgments → classify → Classification
+        produces a classification whose selected candidate is derived from
+        candidate scores, not from generated text."""
+        scorer = StubScorer({"0": 0.2, "1": 0.8})
+        policy = ArgmaxClassificationPolicy()
+        deps = ClassifyInputDeps(scorer=scorer, policy=policy)
+
+        result = await classify_input(deps, "example input", _candidates("0", "1"))
+
+        assert result.selected == Candidate("1")
+        assert len(result.judgments) == 2
+        assert result.judgments[0].candidate == Candidate("0")
+        assert result.judgments[1].candidate == Candidate("1")
+
+    async def test_candidate_ordering_preserved_through_path(self) -> None:
+        """candidates[i] == judgments[i].candidate holds for all candidates
+        after the full scorer → policy path."""
+        candidates = _candidates("a", "b", "c")
+        scorer = StubScorer({"a": 0.5, "b": 0.8, "c": 0.2})
+        policy = ArgmaxClassificationPolicy()
+        deps = ClassifyInputDeps(scorer=scorer, policy=policy)
+
+        result = await classify_input(deps, "text", candidates)
+
+        for i, candidate in enumerate(candidates):
+            assert result.judgments[i].candidate == candidate

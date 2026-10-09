@@ -147,3 +147,71 @@ def test_result_row_schema_has_no_confidence_or_raw_classify() -> None:
     assert "selected_candidate" in d
     assert "judgment_scores" in d
     assert "predicted_decision" in d
+
+
+@pytest.mark.asyncio
+async def test_predicted_decision_integer_conversion() -> None:
+    """Candidate("1") -> predicted_decision == 1 (int conversion succeeds)."""
+    candidates = [Candidate("0"), Candidate("1")]
+    scorer = AsyncMock()
+    scorer.score.return_value = [
+        Judgment(candidate=candidates[0], score=0.2),
+        Judgment(candidate=candidates[1], score=0.8),
+    ]
+    runner = _make_runner(scorer=scorer, candidates=candidates)
+
+    runner._semaphore = asyncio.Semaphore(1)
+    example = _FakeRecord(id=1, text="text", label=1)
+    results: list[ResultRow | None] = [None]
+
+    await runner._process_example(MagicMock(), example, 0, results)
+
+    row = results[0]
+    assert row is not None
+    assert row.predicted_decision == 1
+    assert row.selected_candidate == "1"
+
+
+@pytest.mark.asyncio
+async def test_predicted_decision_non_integer_falls_back_to_none() -> None:
+    """A non-integer selected value -> predicted_decision == None."""
+    candidates = [Candidate("yes"), Candidate("no")]
+    scorer = AsyncMock()
+    scorer.score.return_value = [
+        Judgment(candidate=candidates[0], score=0.8),
+        Judgment(candidate=candidates[1], score=0.2),
+    ]
+    runner = _make_runner(scorer=scorer, candidates=candidates)
+
+    runner._semaphore = asyncio.Semaphore(1)
+    example = _FakeRecord(id=2, text="text", label=1)
+    results: list[ResultRow | None] = [None]
+
+    await runner._process_example(MagicMock(), example, 0, results)
+
+    row = results[0]
+    assert row is not None
+    assert row.predicted_decision is None
+    assert row.selected_candidate == "yes"
+
+
+@pytest.mark.asyncio
+async def test_judgment_scores_populated_from_classification_judgments() -> None:
+    """judgment_scores is populated from Classification.judgments."""
+    candidates = [Candidate("0"), Candidate("1")]
+    scorer = AsyncMock()
+    scorer.score.return_value = [
+        Judgment(candidate=candidates[0], score=-1.5),
+        Judgment(candidate=candidates[1], score=-0.3),
+    ]
+    runner = _make_runner(scorer=scorer, candidates=candidates)
+
+    runner._semaphore = asyncio.Semaphore(1)
+    example = _FakeRecord(id=3, text="text", label=1)
+    results: list[ResultRow | None] = [None]
+
+    await runner._process_example(MagicMock(), example, 0, results)
+
+    row = results[0]
+    assert row is not None
+    assert row.judgment_scores == {"0": -1.5, "1": -0.3}

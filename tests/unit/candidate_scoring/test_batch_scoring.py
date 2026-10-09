@@ -243,6 +243,24 @@ class TestBatchTokenization:
         unpadded_len = prefix_count + len(candidate_ids)
         assert full_ids[prefix_count:unpadded_len] == candidate_ids
 
+    def test_candidate_token_boundary_multiple_candidates(self) -> None:
+        """Candidate token IDs used for scoring exactly occupy the candidate
+        continuation positions in the actual model input for all batch items,
+        not independently tokenized and concatenated."""
+        tokenizer = StubBatchTokenizer()
+        result = tokenizer.encode_batch(
+            prefixes=["prefix_one", "prefix_two", "prefix_three"],
+            candidates=["a", "bc", "def"],
+        )
+        for i in range(3):
+            prefix_count = result.prefix_token_counts[i]
+            candidate_ids = result.candidate_token_ids[i]
+            full_ids = result.input_ids[i]
+            unpadded_len = prefix_count + len(candidate_ids)
+            assert full_ids[prefix_count:unpadded_len] == candidate_ids, (
+                f"item {i}: candidate token IDs do not match continuation positions"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Task 1.2: HuggingFaceBatchTokenizerAdapter (protocol satisfaction)

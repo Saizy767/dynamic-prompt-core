@@ -21,8 +21,6 @@ from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
 from dynamic_prompt_core.application.use_cases.run_cycle.state import CycleState
 from dynamic_prompt_core.domain.prompts.base import PromptArtifact, PromptLayer
 
-from tests.unit.evaluate_stop_criteria.conftest import make_context
-
 
 class _StubRunRepository:
     def save_results(self, results: list[dict[str, Any]], run_id: str, path: str) -> str:
@@ -109,6 +107,9 @@ def test_check_stop_continue():
 
 def test_stop_criteria_deps_optional():
     """RunCycleDeps constructs without stop_criteria_deps (backward compatible)."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
+        RunCycleDeps,
+    )
     from tests.unit.run_cycle.conftest import (
         FAKE_CANDIDATES,
         FakeCandidateScorer,
@@ -118,10 +119,6 @@ def test_stop_criteria_deps_optional():
         MockNormalizer,
         MockPromptRepository,
         MockRunRepository,
-    )
-
-    from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
-        RunCycleDeps,
     )
 
     deps = RunCycleDeps(
@@ -140,6 +137,9 @@ def test_stop_criteria_deps_optional():
 
 def test_stop_criteria_deps_provided():
     """RunCycleDeps accepts stop_criteria_deps when provided."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
+        RunCycleDeps,
+    )
     from tests.unit.run_cycle.conftest import (
         FAKE_CANDIDATES,
         FakeCandidateScorer,
@@ -149,10 +149,6 @@ def test_stop_criteria_deps_provided():
         MockNormalizer,
         MockPromptRepository,
         MockRunRepository,
-    )
-
-    from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
-        RunCycleDeps,
     )
 
     stop_deps = EvaluateStopCriteriaDeps(run_repository=_StubRunRepository())

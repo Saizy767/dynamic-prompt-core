@@ -56,4 +56,4 @@ class RunCycleDeps:
     classification_policy: ClassificationPolicy
     candidates: tuple[Candidate, ...]
     teacher_llm_client: TeacherLLMClient | None = None
-    stop_criteria_deps: "EvaluateStopCriteriaDeps | None" = None
+    stop_criteria_deps: EvaluateStopCriteriaDeps | None = None

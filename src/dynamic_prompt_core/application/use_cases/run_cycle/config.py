@@ -51,7 +51,7 @@ class CycleConfig:
     dump_state_after_each_round: bool = True
     use_teacher_refinement: bool = False
     duration: int | list[int] = 0
-    stop_criteria_config: "StopCriteriaConfig | None" = None
+    stop_criteria_config: StopCriteriaConfig | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.duration, list) and self.duration:

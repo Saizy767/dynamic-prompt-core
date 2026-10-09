@@ -1,13 +1,12 @@
 """Unit tests for the budget exhaustion criterion."""
 from __future__ import annotations
 
-from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.criteria import (
-    _check_budget,
-)
 from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.config import (
     StopCriteriaConfig,
 )
-
+from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.criteria import (
+    _check_budget,
+)
 from tests.unit.evaluate_stop_criteria.conftest import make_context
 
 

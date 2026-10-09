@@ -14,7 +14,6 @@ from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.deps impor
 from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.evaluate import (
     evaluate_stop_criteria,
 )
-
 from tests.unit.evaluate_stop_criteria.conftest import make_context, metrics
 
 

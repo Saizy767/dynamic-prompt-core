@@ -6,7 +6,7 @@ pure: they have no side effects and depend only on the context and config.
 """
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from dynamic_prompt_core.application.ports.outbound.stop_criteria import (
     StopEvaluationContext,
