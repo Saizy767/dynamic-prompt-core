@@ -73,8 +73,9 @@ class TorchCausalLMAdapter:
     ``torch.no_grad()`` with the model in ``eval()`` mode.
     """
 
-    def __init__(self, model: Any) -> None:
+    def __init__(self, model: Any, model_path: str | None = None) -> None:
         self._model = model
+        self._model_path = model_path
 
     def forward(self, input_ids: list[int]) -> SequenceLogits:
         import torch
@@ -89,6 +90,9 @@ class TorchCausalLMAdapter:
             ]
         return SequenceLogits(logits=tuple(per_position))
 
+    def describe(self) -> dict[str, Any]:
+        return {"backend": "huggingface", "model_path": self._model_path}
+
 
 class TorchBatchedCausalLMAdapter:
     """Concrete batched adapter for a PyTorch causal language model.
@@ -98,8 +102,9 @@ class TorchBatchedCausalLMAdapter:
     The model lifecycle is owned externally.
     """
 
-    def __init__(self, model: Any) -> None:
+    def __init__(self, model: Any, model_path: str | None = None) -> None:
         self._model = model
+        self._model_path = model_path
 
     def forward_batch(
         self,
@@ -124,6 +129,9 @@ class TorchBatchedCausalLMAdapter:
                 ]
                 batch_logits.append(SequenceLogits(logits=tuple(per_position)))
         return BatchedLogits(items=tuple(batch_logits))
+
+    def describe(self) -> dict[str, Any]:
+        return {"backend": "huggingface", "model_path": self._model_path}
 
 
 class SequentialBatchCompatibilityAdapter:

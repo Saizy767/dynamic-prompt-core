@@ -71,6 +71,29 @@ ScoringPromptBuilder → BatchTokenizerAdapter → BatchedCausalLanguageModel
 возвращает `Classification`. `ArgmaxClassificationPolicy` выбирает кандидата с
 наивысшей оценкой; ties разрешаются по порядку входа.
 
+#### Backend selection
+
+Поддерживается два backend'а для logit-scoring, выбираются в `[model]` секции
+`config.toml`:
+
+- **`huggingface`** (по умолчанию) — загрузка модели через `transformers`.
+- **`gguf`** — загрузка локального GGUF-файла через `llama-cpp-python` (опциональная
+  зависимость). Backend использует тот же `LogitScorer` и `ScoringPromptBuilder`,
+  что и Hugging Face; меняются только adapter'ы модели и токенизатора.
+
+```toml
+[model]
+backend = "gguf"
+model_path = "models/classifier.gguf"
+
+[model.gguf]
+n_ctx = 2048
+n_batch = 512
+seed = 42
+```
+
+См. [docs/gguf-backend.md](docs/gguf-backend.md) для подробностей.
+
 ## Цикл оптимизации
 
 Центральный use case — `run_cycle` в `application/use_cases/run_cycle/`. Он
@@ -149,6 +172,8 @@ duration = [50, 100, 200]
 - `state_{run_id}_{ts}.json` — state dump для возобновления
 - `summary_{run_id}_{ts}.json` — финальный отчёт при остановке
 - `cycle_log_{run_id}_{ts}.jsonl` — append-only лог событий
+- `manifest_{run_id}_{prompt_version}_{split}.json` — метаданные запуска
+  (backend, model checksum, inference settings) для проверки identity при resume
 
 ## Компоненты
 
@@ -189,7 +214,8 @@ duration = [50, 100, 200]
 - aiohttp
 - pydantic v2
 - numpy
-- torch + transformers (candidate scoring via logit-scoring)
+- torch + transformers (candidate scoring via logit-scoring, Hugging Face backend)
+- llama-cpp-python (опционально — GGUF backend; `pip install 'dynamic-prompt-core[gguf]'`)
 - доступ к llama.cpp или vLLM серверу по OpenAI-совместимому API (thesis extraction)
 
 ## Статические проверки

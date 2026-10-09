@@ -17,3 +17,6 @@ spacy>=3.7
 
 # Dataset (parquet support)
 pyarrow>=15.0
+
+# GGUF backend (optional — install separately to use the gguf scorer backend)
+# llama-cpp-python>=0.3.0,<0.4

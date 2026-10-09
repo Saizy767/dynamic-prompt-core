@@ -178,6 +178,7 @@ class BaselineRunner:
         dataset_artifact: str | None = None,
         duration: int | None = None,
         classify_prompt: PromptArtifact | None = None,
+        backend_metadata: dict[str, Any] | None = None,
     ) -> None:
         self._task = task
         self._scorer = scorer
@@ -191,6 +192,7 @@ class BaselineRunner:
         self._concurrency = config.concurrency
         self._checkpoint_interval = config.checkpoint_interval
         self._timestamp: str | None = None
+        self._backend_metadata = backend_metadata
 
         if classify_prompt is not None:
             self._classify_prompt = classify_prompt
@@ -253,6 +255,78 @@ class BaselineRunner:
     def _request_log_path(self) -> str:
         name = f"requests_{self._run_id}_{self._split}.jsonl"
         return os.path.join(self._output_dir, name)
+
+    def _manifest_path(self) -> str:
+        name = (
+            f"manifest_{self._run_id}_{self._prompt_version}_{self._split}.json"
+        )
+        return os.path.join(self._output_dir, name)
+
+    def _resolve_backend_metadata(self) -> dict[str, Any] | None:
+        backend_metadata = self._backend_metadata
+        if backend_metadata is not None:
+            return backend_metadata
+        describe_fn = getattr(self._scorer, "describe", None)
+        if describe_fn is not None:
+            result = describe_fn()
+            if isinstance(result, dict):
+                return dict(result)
+        return None
+
+    def _write_manifest(self, dataset_fingerprint: str | None) -> None:
+        backend_metadata = self._resolve_backend_metadata()
+        if backend_metadata is None:
+            return
+        from dynamic_prompt_core.infrastructure.storage.run_metadata import (
+            build_run_metadata,
+            write_manifest,
+        )
+
+        prompt_sha256 = getattr(self._classify_prompt, "sha256", None)
+        meta = build_run_metadata(
+            run_id=self._run_id,
+            prompt_version=self._prompt_version,
+            backend_metadata=backend_metadata,
+            prompt_sha256=prompt_sha256,
+            split=self._split,
+            dataset_path=self._dataset_artifact,
+            dataset_fingerprint=dataset_fingerprint,
+            timestamp=self._timestamp,
+        )
+        write_manifest(self._manifest_path(), meta)
+
+    def _verify_resume_identity(self) -> None:
+        manifest_path = self._manifest_path()
+        if not os.path.exists(manifest_path):
+            return
+        backend_metadata = self._resolve_backend_metadata()
+        if backend_metadata is None:
+            return
+        from dynamic_prompt_core.infrastructure.storage.run_metadata import (
+            build_run_metadata,
+            load_manifest,
+            verify_resume_identity,
+        )
+
+        recorded = load_manifest(manifest_path)
+        prompt_sha256 = getattr(self._classify_prompt, "sha256", None)
+        current = build_run_metadata(
+            run_id=self._run_id,
+            prompt_version=self._prompt_version,
+            backend_metadata=backend_metadata,
+            prompt_sha256=prompt_sha256,
+            split=self._split,
+            dataset_path=self._dataset_artifact,
+            timestamp=self._timestamp,
+        )
+        result = verify_resume_identity(recorded, current)
+        if result.should_reject:
+            raise ValueError(
+                f"resume identity mismatch in semantic fields "
+                f"{result.mismatched_semantic_fields}; the recorded run used a "
+                f"different model, dataset, or scoring configuration — reject "
+                f"or start a new experiment"
+            )
 
     # -- checkpoint --------------------------------------------------------- #
     def _load_checkpoint_ids(self) -> set[Any]:
@@ -420,6 +494,9 @@ class BaselineRunner:
         if not examples:
             raise ValueError(f"split '{self._split}' has no examples")
 
+        self._verify_resume_identity()
+        self._write_manifest(dataset_fingerprint=None)
+
         if self._duration is not None:
             if self._duration <= 0:
                 raise ValueError(f"--duration must be a positive integer, got {self._duration}")
@@ -479,17 +556,22 @@ async def _main_async(args: argparse.Namespace) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     with open(args.config, "rb") as f:
-        llm_config = tomllib.load(f).get("llm", {})
-    model_path = llm_config.get("model_path", "model")
+        raw_config = tomllib.load(f)
+    model_path = raw_config.get("llm", {}).get("model_path", "model")
 
     from dynamic_prompt_core.application.services.classification_policy import (
         ArgmaxClassificationPolicy,
+    )
+    from dynamic_prompt_core.infrastructure.llm.scoring.config import (
+        scorer_backend_config_from_toml,
     )
     from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
         build_candidate_scorer,
     )
 
-    scorer = build_candidate_scorer(model_path)
+    scorer = build_candidate_scorer(
+        scorer_backend_config_from_toml(raw_config, default_model_path=model_path)
+    )
     policy = ArgmaxClassificationPolicy()
     candidates = [Candidate(v) for v in config.candidates]
 

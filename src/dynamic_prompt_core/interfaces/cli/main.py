@@ -154,6 +154,9 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     )
     from dynamic_prompt_core.domain.models.candidate import Candidate
     from dynamic_prompt_core.infrastructure.llm import AsyncTask
+    from dynamic_prompt_core.infrastructure.llm.scoring.config import (
+        scorer_backend_config_from_toml,
+    )
     from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
         build_candidate_scorer,
     )
@@ -173,7 +176,9 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     with open(config_path, "rb") as f:
         toml_config = tomllib.load(f)
     model_path = toml_config.get("llm", {}).get("model_path", "model")
-    scorer = build_candidate_scorer(model_path)
+    scorer = build_candidate_scorer(
+        scorer_backend_config_from_toml(toml_config, default_model_path=model_path)
+    )
     policy = ArgmaxClassificationPolicy()
     candidates = tuple(
         Candidate(v)

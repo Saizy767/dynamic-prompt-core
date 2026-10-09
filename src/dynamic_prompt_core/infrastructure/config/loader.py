@@ -42,3 +42,19 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
             f"must be one of {VALID_BACKENDS}"
         )
     return cast(dict[str, Any], llm)
+
+
+def load_raw_config(path: str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
+    """Load a TOML config file and return the full parsed dict.
+
+    Raises ``ConfigError`` on missing file or invalid TOML.  Used by callers
+    that need sections beyond ``[llm]`` (e.g. ``[model]`` for scorer backend
+    selection) without re-parsing the file.
+    """
+    try:
+        with open(path, "rb") as f:
+            return cast(dict[str, Any], tomllib.load(f))
+    except FileNotFoundError as exc:
+        raise ConfigError(f"Config file not found: {path}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"Invalid TOML in {path}: {exc}") from exc

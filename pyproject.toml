@@ -28,6 +28,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+gguf = [
+    "llama-cpp-python>=0.3.0,<0.4",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -138,6 +141,10 @@ ignore_missing_imports = true
 module = "pyarrow.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "llama_cpp.*"
+ignore_missing_imports = true
+
 # --------------------------------------------------------------------------- #
 #  ruff — linting and formatting
 # --------------------------------------------------------------------------- #
@@ -160,3 +167,6 @@ known-first-party = ["dynamic_prompt_core"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+markers = [
+    "gguf: requires the optional llama-cpp-python runtime and a GGUF test fixture",
+]

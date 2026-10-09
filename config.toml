@@ -44,6 +44,27 @@ startup_timeout = 60
 # gpu_memory_utilization = 0.9
 # tensor_parallel_size = 1
 
+# Scorer backend selection for candidate-scoring classification.
+# The baseline runner and optimization cycle build the CandidateScorer from
+# this section. When absent, defaults to the Hugging Face backend with
+# [llm].model_path (preserving existing behavior).
+[model]
+# Backend: "huggingface" (transformers) or "gguf" (llama-cpp-python, optional).
+backend = "gguf"
+# Model path: HF repo id / local dir (huggingface) or GGUF file path (gguf).
+model_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
+
+# GGUF backend parameters (used only when backend = "gguf").
+# Requires: pip install 'dynamic-prompt-core[gguf]'
+[model.gguf]
+n_ctx = 2048
+n_batch = 512
+# n_threads = 4        # CPU threads; omit for auto
+n_gpu_layers = 0
+seed = 42
+verbose = false
+logits_all = true
+
 # Dataset configuration for dataset.py (loader, split, artifact persistence).
 # asyncTask.py ignores this section; it only reads [llm].
 [dataset]
@@ -188,7 +209,7 @@ max_rounds = 5
 # Examples:
 #   duration = 100          # 5 rounds, 100 rows each
 #   duration = [50, 100, 200]  # 3 rounds: 50, 100, 200 rows
-duration = [10, 50, 100,]
+duration = [5, 10, 10,]
 # Maximum number of consecutive rollbacks before the cycle stops. The counter
 # is reset on acceptance. Delegates to version_comparator's check_stop.
 max_consecutive_rollbacks = 2

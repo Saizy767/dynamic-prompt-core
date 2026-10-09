@@ -125,11 +125,6 @@ def load_active_version(
 # --------------------------------------------------------------------------- #
 #  Run new version on dev
 # --------------------------------------------------------------------------- #
-def _load_model_path(config_path: str) -> str:
-    with open(config_path, "rb") as f:
-        return str(tomllib.load(f).get("llm", {}).get("model_path", "model"))
-
-
 async def _run_version_async(
     prompt_artifact: PromptArtifact,
     config_path: str,
@@ -148,6 +143,9 @@ async def _run_version_async(
     )
     from dynamic_prompt_core.domain.models.candidate import Candidate
     from dynamic_prompt_core.infrastructure.llm import AsyncTask
+    from dynamic_prompt_core.infrastructure.llm.scoring.config import (
+        scorer_backend_config_from_toml,
+    )
     from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
         build_candidate_scorer,
     )
@@ -166,12 +164,18 @@ async def _run_version_async(
         run_id=run_id,
     )
 
+    with open(config_path, "rb") as f:
+        raw_config = tomllib.load(f)
+    default_model_path = str(raw_config.get("llm", {}).get("model_path", "model"))
+
     runner = BaselineRunner(
         task=task,
         config=runner_config,
         split=split,
         scorer=build_candidate_scorer(
-            _load_model_path(config_path)
+            scorer_backend_config_from_toml(
+                raw_config, default_model_path=default_model_path
+            )
         ),
         policy=ArgmaxClassificationPolicy(),
         candidates=[Candidate(v) for v in runner_config.candidates],

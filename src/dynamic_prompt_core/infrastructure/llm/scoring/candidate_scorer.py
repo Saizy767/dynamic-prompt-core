@@ -53,6 +53,18 @@ class LLMLogitCandidateScorer:
         self._model = model
         self._logit_scorer = logit_scorer
 
+    def describe(self) -> dict[str, object]:
+        """Return backend metadata from the model adapter (infrastructure-internal).
+
+        Delegates to the model adapter's ``describe()`` if available.  This is
+        NOT part of the ``CandidateScorer`` port; it is an infrastructure-internal
+        hook used by the composition root to build run metadata.
+        """
+        describe_fn = getattr(self._model, "describe", None)
+        if describe_fn is not None:
+            return dict(describe_fn())
+        return {}
+
     async def score(
         self,
         text: str,
@@ -70,6 +82,10 @@ class LLMLogitCandidateScorer:
             ]
             prefixes = [prefix] * len(candidates)
 
+            log.info(
+                "CandidateScorer.score: text=%d chars, %d candidates",
+                len(text), len(candidates),
+            )
             batch = self._tokenizer.encode_batch(prefixes, candidate_texts)
 
             batched_logits = await asyncio.to_thread(
@@ -83,6 +99,12 @@ class LLMLogitCandidateScorer:
                 candidate_token_ids=batch.candidate_token_ids,
                 batched_logits=batched_logits,
             )
+
+            for candidate, score in zip(candidates, scores, strict=True):
+                log.debug(
+                    "CandidateScorer: candidate=%r score=%.6f",
+                    candidate.value, score,
+                )
 
             return [
                 Judgment(candidate=candidate, score=score)
