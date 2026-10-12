@@ -415,8 +415,25 @@ class BaselineRunner:
 
             classify_start = time.monotonic()
             try:
+                score_start = time.monotonic()
+                log.info(
+                    "BaselineRunner: scorer.score START id=%s, %d candidates",
+                    example.id, len(self._candidates),
+                )
                 judgments = await self._scorer.score(example.text, self._candidates)
+                score_latency_ms = (time.monotonic() - score_start) * 1000
+                log.info(
+                    "BaselineRunner: scorer.score END id=%s in %.2fms",
+                    example.id, score_latency_ms,
+                )
+
+                policy_start = time.monotonic()
                 classification = self._policy.classify(judgments)
+                policy_latency_ms = (time.monotonic() - policy_start) * 1000
+                log.info(
+                    "BaselineRunner: policy.classify id=%s in %.2fms",
+                    example.id, policy_latency_ms,
+                )
                 classify_status = _RUNNER_STATUS_OK
                 selected_candidate = classification.selected.value
                 try:

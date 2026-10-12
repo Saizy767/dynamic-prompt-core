@@ -36,14 +36,6 @@ threads = 4          # llamacpp: -t (CPU threads); vllm: ignored
 # llama-server is fast (~10s); vllm model load can take minutes.
 startup_timeout = 60
 
-# Optional backend-specific extra flags. Uncomment to use.
-[llm.llamacpp]
-# extra_args = []
-
-[llm.vllm]
-# gpu_memory_utilization = 0.9
-# tensor_parallel_size = 1
-
 # Scorer backend selection for candidate-scoring classification.
 # The baseline runner and optimization cycle build the CandidateScorer from
 # this section. When absent, defaults to the Hugging Face backend with
@@ -59,7 +51,6 @@ model_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
 [model.gguf]
 n_ctx = 2048
 n_batch = 512
-# n_threads = 4        # CPU threads; omit for auto
 n_gpu_layers = 0
 seed = 42
 verbose = false
@@ -206,13 +197,7 @@ max_rounds = 5
 #   N  — process N rows in every round.
 #   [N1, N2, ...] — run len(list) rounds (overrides max_rounds), round i
 #                   processes list[i] rows.
-# Examples:
-#   duration = 100          # 5 rounds, 100 rows each
-#   duration = [50, 100, 200]  # 3 rounds: 50, 100, 200 rows
 duration = [5, 10, 10,]
-# Maximum number of consecutive rollbacks before the cycle stops. The counter
-# is reset on acceptance. Delegates to version_comparator's check_stop.
-max_consecutive_rollbacks = 2
 # Dataset splits to use for the active and holdout runs. The dev split drives
 # the accept/rollback decision; the holdout split is logged only.
 dev_split = "dev"
@@ -237,11 +222,6 @@ dump_state_after_each_round = true
 report_format = "json"
 # Directory for cycle artifacts (reports, summaries, state dumps, cycle log).
 output_dir = "data/results"
-# Metric used for the accept/rollback decision. One of: accuracy, macro_f1,
-# minority_f1, weighted_f1. Delegates to version_comparator's decide().
-decision_metric = "macro_f1"
-# Tie-breaker metric when decision_metric is equal between versions.
-tie_breaker_metric = "minority_f1"
 # When true, run stage4-teacher-refinement between the baseline run and thesis
 # analysis each round. Requires [teacher].endpoint to be configured.
 use_teacher_refinement = false
@@ -255,10 +235,6 @@ use_teacher_refinement = false
 # Path to the store JSON file. All version records are kept in this one file.
 # Required: the store will not initialize without a path.
 store_path = "data/prompt_store.json"
-# Maximum number of versions to retain. When unset (commented), there is no
-# limit and no pruning. When set, the oldest archived versions (not in the
-# active version's lineage) are deleted when the count exceeds this limit.
-# max_versions = 100
 # When true, the store file is written atomically (write-to-temp then rename)
 # to prevent corruption on crash. Set to false only for debugging.
 atomic_writes = true
@@ -365,10 +341,6 @@ source_store_path = "data/prompt_store.json"
 target_store_path = "data/target_prompt_store.json"
 # Path to the source thesis-bank dump JSON file. Required.
 source_thesis_bank_path = "data/results/thesis_bank_cycle-20261005T120000Z_classify-v3_20261005T120000Z.json"
-# Maximum number of theses to transfer from the source collection. When unset
-# (commented), all source theses are transferred. When set, only the top N by
-# descending source frequency are transferred.
-# max_transfer_theses = 100
 # When true, cluster centroids from the source are transferred as initial
 # clustering points for the target. When false, the target starts with empty
 # clustering.

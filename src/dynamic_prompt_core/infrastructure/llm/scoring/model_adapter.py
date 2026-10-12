@@ -14,6 +14,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from dynamic_prompt_core.infrastructure.llm.scoring.instrumentation import (
+    ScoringProfile,
+)
+
 
 @dataclass(frozen=True)
 class SequenceLogits:
@@ -32,10 +36,13 @@ class BatchedLogits:
 
     Has the semantic shape ``[batch_size, sequence_length, vocabulary_size]``.
     ``items[i]`` is the ``SequenceLogits`` for batch item ``i``, preserving the
-    input batch order without reordering.
+    input batch order without reordering.  ``profile`` carries optional
+    per-stage performance instrumentation produced by the model adapter; it is
+    ``None`` for adapters that do not instrument their forward pass.
     """
 
     items: tuple[SequenceLogits, ...]
+    profile: ScoringProfile | None = None
 
 
 @runtime_checkable

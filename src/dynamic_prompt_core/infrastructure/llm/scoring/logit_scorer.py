@@ -26,16 +26,35 @@ from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
     SequenceLogits,
 )
 
+try:
+    import numpy as _np
+except ImportError:  # pragma: no cover - NumPy is a core dependency
+    _np = None  # type: ignore[assignment]
 
-def _log_softmax(logits: Sequence[float]) -> list[float]:
-    """Compute log_softmax of a logit vector numerically stably."""
-    values = list(logits)
-    if not values:
-        return []
-    max_val = max(values)
-    shifted = [v - max_val for v in values]
-    log_sum_exp = math.log(sum(math.exp(v) for v in shifted))
-    return [v - log_sum_exp for v in shifted]
+
+def _log_probability(logits: Sequence[float], token_id: int) -> float:
+    """Compute ``log_softmax(logits)[token_id]`` directly as ``z_i - LSE(z)``.
+
+    Uses the numerically stable log-sum-exp: ``a = max(z)``,
+    ``LSE = a + log(sum(exp(z_j - a)))``.  This avoids materializing the full
+    normalized log-probability vector when only one token's score is needed.
+
+    Uses a vectorized NumPy path when NumPy is available and a pure-Python
+    fallback otherwise.  Raises ``LLMScoringError`` for an empty logit vector.
+    Non-finite logits propagate to the caller, which rejects them via the
+    existing final-score validation policy.
+    """
+    if not logits:
+        raise LLMScoringError("empty logit vector")
+    if _np is not None:
+        arr = _np.asarray(logits, dtype=_np.float64)
+        max_val = float(_np.max(arr))
+        shifted = arr - max_val
+        log_sum_exp = max_val + float(_np.log(_np.sum(_np.exp(shifted))))
+        return float(arr[token_id]) - log_sum_exp
+    max_val = max(logits)
+    log_sum_exp = max_val + math.log(sum(math.exp(v - max_val) for v in logits))
+    return logits[token_id] - log_sum_exp
 
 
 class LogitScorer:
@@ -71,8 +90,7 @@ class LogitScorer:
                     f"token id {token_id} out of range for vocab size "
                     f"{len(position_logits)}"
                 )
-            ls = _log_softmax(position_logits)
-            log_probs.append(ls[token_id])
+            log_probs.append(_log_probability(position_logits, token_id))
 
         result = sum(log_probs) / len(log_probs)
 

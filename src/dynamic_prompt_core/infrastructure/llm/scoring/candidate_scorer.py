@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate
@@ -74,36 +75,98 @@ class LLMLogitCandidateScorer:
 
         Returns exactly one ``Judgment`` per candidate in input order.
         Raises ``CandidateScoringError`` if any candidate cannot be evaluated.
+
+        Timing relationship: ``forward`` is the wall-clock of the
+        ``asyncio.to_thread`` call (the aggregate, including thread-offload
+        overhead).  The adapter sub-stages (lock_wait + reset + eval +
+        logits_read + logits_convert + logits_validate) decompose the
+        in-thread work and are reported separately — they are NOT added to
+        ``forward``, so no interval is double-counted.  ``scoring_ms`` is the
+        logit-to-score post-processing measured independently of the forward
+        call.
         """
         try:
+            t_total = time.perf_counter()
+            log.info(
+                "CandidateScorer.score: START text=%d chars, %d candidates",
+                len(text), len(candidates),
+            )
+
+            t0 = time.perf_counter()
             prefix = self._prompt_builder.build_prefix(text)
             candidate_texts = [
                 self._prompt_builder.build_candidate(c) for c in candidates
             ]
             prefixes = [prefix] * len(candidates)
+            t_prompt = time.perf_counter() - t0
 
-            log.info(
-                "CandidateScorer.score: text=%d chars, %d candidates",
-                len(text), len(candidates),
-            )
+            t0 = time.perf_counter()
             batch = self._tokenizer.encode_batch(prefixes, candidate_texts)
+            t_tokenize = time.perf_counter() - t0
 
+            t0 = time.perf_counter()
             batched_logits = await asyncio.to_thread(
                 self._model.forward_batch,
                 batch.input_ids,
                 batch.attention_mask,
             )
+            t_forward = time.perf_counter() - t0
 
+            t0 = time.perf_counter()
             scores = self._logit_scorer.score_batch(
                 prefix_token_counts=batch.prefix_token_counts,
                 candidate_token_ids=batch.candidate_token_ids,
                 batched_logits=batched_logits,
             )
+            t_logit = time.perf_counter() - t0
+
+            adapter_profile = batched_logits.profile
+            if adapter_profile is not None:
+                adapter_profile.scoring_ms = t_logit * 1e3
+                adapter_profile.scored_tokens = sum(
+                    len(c) for c in batch.candidate_token_ids
+                )
 
             for candidate, score in zip(candidates, scores, strict=True):
                 log.debug(
                     "CandidateScorer: candidate=%r score=%.6f",
                     candidate.value, score,
+                )
+
+            t_total = time.perf_counter() - t_total
+            if adapter_profile is not None:
+                p = adapter_profile
+                log.info(
+                    "CandidateScorer.score: END text=%d chars, %d candidates "
+                    "total=%.2fms | prompt=%.2fms tokenize=%.2fms "
+                    "forward=%.2fms logit=%.2fms "
+                    "| adapter: lock=%.2fms reset=%.2fms eval=%.2fms "
+                    "logits_read=%.2fms convert=%.2fms validate=%.2fms "
+                    "scoring=%.2fms | tokens: input=%d scored=%d "
+                    "vocab=%d candidates=%d",
+                    len(text), len(candidates),
+                    t_total * 1e3,
+                    t_prompt * 1e3,
+                    t_tokenize * 1e3,
+                    t_forward * 1e3,
+                    t_logit * 1e3,
+                    p.lock_wait_ms, p.reset_ms, p.eval_ms,
+                    p.logits_read_ms, p.logits_convert_ms, p.logits_validate_ms,
+                    p.scoring_ms,
+                    p.input_tokens, p.scored_tokens,
+                    p.vocab_size, p.candidate_count,
+                )
+            else:
+                log.info(
+                    "CandidateScorer.score: END text=%d chars, %d candidates "
+                    "total=%.2fms | prompt=%.2fms tokenize=%.2fms "
+                    "forward=%.2fms logit=%.2fms",
+                    len(text), len(candidates),
+                    t_total * 1e3,
+                    t_prompt * 1e3,
+                    t_tokenize * 1e3,
+                    t_forward * 1e3,
+                    t_logit * 1e3,
                 )
 
             return [
