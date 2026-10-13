@@ -47,13 +47,15 @@ def build_candidate_scorer(config: ScorerBackendConfig) -> CandidateScorer:
     )
     if config.backend == "gguf":
         tokenizer, model = _build_gguf_adapters(config)
+    elif config.backend == "llama_server":
+        tokenizer, model = _build_llama_server_adapters(config)
     else:
         tokenizer, model = _build_huggingface_adapters(config)
 
     return LLMLogitCandidateScorer(
         prompt_builder=prompt_builder,
-        tokenizer=tokenizer,
-        model=model,
+        tokenizer=tokenizer,  # type: ignore[arg-type]
+        model=model,  # type: ignore[arg-type]
         logit_scorer=logit_scorer,
     )
 
@@ -95,4 +97,28 @@ def _build_gguf_adapters(config: ScorerBackendConfig) -> tuple[object, object]:
         logits_all=config.gguf.logits_all,
     )
     tokenizer_adapter = LlamaCppBatchTokenizerAdapter(model_adapter.llama)
+    return tokenizer_adapter, model_adapter
+
+
+def _build_llama_server_adapters(
+    config: ScorerBackendConfig,
+) -> tuple[object, object]:
+    from dynamic_prompt_core.infrastructure.llm.scoring.llama_server_model_adapter import (
+        LlamaServerCausalLMAdapter,
+    )
+    from dynamic_prompt_core.infrastructure.llm.scoring.llama_server_tokenizer_adapter import (
+        LlamaServerBatchTokenizerAdapter,
+    )
+
+    assert config.llama_server is not None
+    ls = config.llama_server
+    model_adapter = LlamaServerCausalLMAdapter(
+        endpoint=ls.endpoint,
+        timeout=ls.timeout,
+        served_model_name=None,
+    )
+    tokenizer_adapter = LlamaServerBatchTokenizerAdapter(
+        endpoint=ls.endpoint,
+        timeout=ls.timeout,
+    )
     return tokenizer_adapter, model_adapter

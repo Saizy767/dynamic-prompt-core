@@ -41,8 +41,9 @@ startup_timeout = 60
 # this section. When absent, defaults to the Hugging Face backend with
 # [llm].model_path (preserving existing behavior).
 [model]
-# Backend: "huggingface" (transformers) or "gguf" (llama-cpp-python, optional).
-backend = "gguf"
+# Backend: "huggingface" (transformers), "gguf" (llama-cpp-python, optional),
+# or "llama_server" (HTTP via llama-server, uses Metal GPU acceleration).
+backend = "llama_server"
 # Model path: HF repo id / local dir (huggingface) or GGUF file path (gguf).
 model_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
 
@@ -51,10 +52,18 @@ model_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
 [model.gguf]
 n_ctx = 2048
 n_batch = 512
-n_gpu_layers = 0
+n_gpu_layers = 99
 seed = 42
 verbose = false
 logits_all = true
+
+# llama_server backend parameters (used only when backend = "llama_server").
+# Connects to a llama-server instance (e.g. started by the [llm] launcher or
+# manually: llama-server -m model.gguf --n-gpu-layers 99 --port 8080).
+# No optional dependencies required — uses the core aiohttp package.
+# [model.llama_server]
+# endpoint = "http://127.0.0.1:8080"
+# timeout = 30
 
 # Dataset configuration for dataset.py (loader, split, artifact persistence).
 # asyncTask.py ignores this section; it only reads [llm].
@@ -147,7 +156,7 @@ max_rules = 5
 # Maximum total prompt tokens (system prompt only). The token count uses the
 # AsyncTask tokenizer; falls back to word count when unavailable. The base
 # layers alone are ~155 tokens, so 300 leaves headroom for up to 5 rules.
-max_prompt_tokens = 300
+max_prompt_tokens = 600
 # Maximum number of words per formulated rule. Longer rules are truncated.
 max_rule_words = 15
 # Cosine similarity threshold for the distortion check. Rules whose embedding
@@ -197,7 +206,7 @@ max_rounds = 5
 #   N  — process N rows in every round.
 #   [N1, N2, ...] — run len(list) rounds (overrides max_rounds), round i
 #                   processes list[i] rows.
-duration = [5, 10, 10,]
+duration = 50
 # Dataset splits to use for the active and holdout runs. The dev split drives
 # the accept/rollback decision; the holdout split is logged only.
 dev_split = "dev"
@@ -205,6 +214,11 @@ holdout_split = "holdout"
 # Path to the active prompt-version artifact (prompt_v*_*_*.json). When empty,
 # the cycle starts from the built-in CLASSIFICATION_PROMPT_V0 baseline.
 prompt_store_path = ""
+# Start the cycle from a specific prompt: "best" or "0".
+# "best": load the newest prompt_v*_*_*.json from <output_dir>/prompt/.
+#         If the directory is empty, falls back to v0.
+# "0":   start from the built-in CLASSIFICATION_PROMPT_V0 baseline (default).
+prompt_start = "0"
 # Path to the thesis-bank artifact to seed the cycle. When empty, the cycle
 # starts with an empty thesis bank and builds it in the first round.
 thesis_bank_path = ""

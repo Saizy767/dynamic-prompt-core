@@ -355,3 +355,30 @@ class TestAsyncContract:
         result = scorer.score("text", [Candidate("a")])
         assert hasattr(result, "__await__")
         await result  # Ensure the coroutine is consumed
+
+
+class TestAclose:
+    async def test_aclose_calls_adapters(self) -> None:
+        closed: list[str] = []
+
+        class ClosableModel(StubModel):
+            async def aclose(self) -> None:
+                closed.append("model")
+
+        class ClosableTokenizer(StubTokenizer):
+            async def aclose(self) -> None:
+                closed.append("tokenizer")
+
+        scorer = _make_scorer(
+            tokenizer=ClosableTokenizer(),
+            model=ClosableModel(),
+        )
+        await scorer.aclose()
+        assert closed == ["model", "tokenizer"]
+
+    async def test_aclose_safe_without_method(self) -> None:
+        scorer = _make_scorer(
+            tokenizer=StubTokenizer(),
+            model=StubModel(),
+        )
+        await scorer.aclose()

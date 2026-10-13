@@ -45,6 +45,7 @@ class CycleConfig:
     run_id: str = ""
     output_dir: str = DEFAULT_OUTPUT_DIR
     prompt_store_path: str = ""
+    prompt_start: str = "0"
     thesis_bank_path: str = ""
     candidate_queue_path: str = ""
     stop_on_first_error: bool = False
@@ -102,6 +103,7 @@ class CycleConfig:
             run_id=s.get("run_id", ""),
             output_dir=s.get("output_dir", DEFAULT_OUTPUT_DIR),
             prompt_store_path=s.get("prompt_store_path", ""),
+            prompt_start=s.get("prompt_start", "0"),
             thesis_bank_path=s.get("thesis_bank_path", ""),
             candidate_queue_path=s.get("candidate_queue_path", ""),
             stop_on_first_error=bool(s.get("stop_on_first_error", False)),

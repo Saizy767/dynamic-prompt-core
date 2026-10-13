@@ -376,6 +376,10 @@ async def main(argv: list[str] | None = None) -> int:
     except Exception:
         log.exception("Unrecoverable error during cycle execution.")
         return 1
+    finally:
+        close_fn = getattr(deps.candidate_scorer, "aclose", None)
+        if close_fn is not None:
+            await close_fn()
 
 
 def cli_entry() -> None:

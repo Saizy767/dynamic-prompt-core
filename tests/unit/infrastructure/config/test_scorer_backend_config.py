@@ -6,6 +6,7 @@ import pytest
 from dynamic_prompt_core.infrastructure.config.loader import ConfigError
 from dynamic_prompt_core.infrastructure.llm.scoring.config import (
     GgufParams,
+    LlamaServerParams,
     ScorerBackendConfig,
     scorer_backend_config_from_toml,
 )
@@ -52,6 +53,41 @@ class TestScorerBackendConfigValidation:
                 backend="gguf",
                 model_path="m.gguf",
                 gguf=GgufParams(n_gpu_layers=-5),
+            )
+
+    def test_valid_llama_server_config_defaults(self) -> None:
+        cfg = ScorerBackendConfig(backend="llama_server", model_path="m.gguf")
+        assert cfg.llama_server is not None
+        assert cfg.llama_server.endpoint == "http://127.0.0.1:8080"
+        assert cfg.llama_server.timeout == 30
+
+    def test_llama_server_custom_endpoint(self) -> None:
+        cfg = ScorerBackendConfig(
+            backend="llama_server",
+            model_path="m.gguf",
+            llama_server=LlamaServerParams(
+                endpoint="http://192.168.1.10:9090",
+                timeout=60,
+            ),
+        )
+        assert cfg.llama_server is not None
+        assert cfg.llama_server.endpoint == "http://192.168.1.10:9090"
+        assert cfg.llama_server.timeout == 60
+
+    def test_llama_server_invalid_endpoint_raises(self) -> None:
+        with pytest.raises(ConfigError, match="invalid endpoint"):
+            ScorerBackendConfig(
+                backend="llama_server",
+                model_path="m.gguf",
+                llama_server=LlamaServerParams(endpoint="ftp://bad"),
+            )
+
+    def test_llama_server_invalid_timeout_raises(self) -> None:
+        with pytest.raises(ConfigError, match="invalid timeout"):
+            ScorerBackendConfig(
+                backend="llama_server",
+                model_path="m.gguf",
+                llama_server=LlamaServerParams(timeout=0),
             )
 
 
@@ -107,3 +143,44 @@ class TestScorerBackendConfigFromToml:
             scorer_backend_config_from_toml(
                 {"model": {"backend": "unknown", "model_path": "m"}}
             )
+
+    def test_llama_server_section_with_params(self) -> None:
+        cfg = scorer_backend_config_from_toml(
+            {
+                "model": {
+                    "backend": "llama_server",
+                    "model_path": "m.gguf",
+                    "llama_server": {
+                        "endpoint": "http://10.0.0.1:7070",
+                        "timeout": 45,
+                    },
+                }
+            }
+        )
+        assert cfg.backend == "llama_server"
+        assert cfg.llama_server is not None
+        assert cfg.llama_server.endpoint == "http://10.0.0.1:7070"
+        assert cfg.llama_server.timeout == 45
+
+    def test_llama_server_section_defaults(self) -> None:
+        cfg = scorer_backend_config_from_toml(
+            {"model": {"backend": "llama_server", "model_path": "m.gguf"}}
+        )
+        assert cfg.llama_server is not None
+        assert cfg.llama_server.endpoint == "http://127.0.0.1:8080"
+        assert cfg.llama_server.timeout == 30
+
+    def test_llama_server_does_not_affect_gguf(self) -> None:
+        cfg = scorer_backend_config_from_toml(
+            {
+                "model": {
+                    "backend": "gguf",
+                    "model_path": "m.gguf",
+                    "gguf": {"n_ctx": 1024},
+                }
+            }
+        )
+        assert cfg.backend == "gguf"
+        assert cfg.gguf is not None
+        assert cfg.gguf.n_ctx == 1024
+        assert cfg.llama_server is None

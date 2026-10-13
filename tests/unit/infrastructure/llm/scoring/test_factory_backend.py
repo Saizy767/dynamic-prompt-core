@@ -9,6 +9,7 @@ from dynamic_prompt_core.infrastructure.llm.scoring import factory as factory_mo
 from dynamic_prompt_core.infrastructure.llm.scoring import llama_cpp_adapter
 from dynamic_prompt_core.infrastructure.llm.scoring.config import (
     GgufParams,
+    LlamaServerParams,
     ScorerBackendConfig,
 )
 from dynamic_prompt_core.infrastructure.llm.scoring.errors import GGUFProviderError
@@ -104,3 +105,28 @@ class TestFactoryMissingDependency:
         )
         with pytest.raises(GGUFProviderError, match="llama-cpp-python"):
             factory_module.build_candidate_scorer(cfg)
+
+
+class TestFactoryLlamaServer:
+    def test_llama_server_backend_returns_scorer(self) -> None:
+        cfg = ScorerBackendConfig(
+            backend="llama_server",
+            model_path="m.gguf",
+            llama_server=LlamaServerParams(
+                endpoint="http://127.0.0.1:8080",
+                timeout=30,
+            ),
+        )
+        scorer = factory_module.build_candidate_scorer(cfg)
+        assert callable(getattr(scorer, "score", None))
+
+    def test_llama_server_does_not_import_llama_cpp(self) -> None:
+        import sys
+
+        sys.modules.pop("llama_cpp", None)
+        cfg = ScorerBackendConfig(
+            backend="llama_server",
+            model_path="m.gguf",
+        )
+        factory_module.build_candidate_scorer(cfg)
+        assert "llama_cpp" not in sys.modules

@@ -77,6 +77,45 @@ def _extract_rule_set(state: CycleState) -> frozenset[str]:
     return frozenset()
 
 
+def _load_best_prompt(
+    prompt_dir: str,
+) -> tuple[Any, str]:
+    """Load the best prompt artifact from a directory.
+
+    Scans ``prompt_dir`` for ``prompt_v*_*_*.json`` files and picks the
+    newest by filename sort order.  Falls back to ``CLASSIFICATION_PROMPT_V0``
+    when the directory is empty or does not exist.
+    """
+    import glob as globlib
+
+    from dynamic_prompt_core.application.use_cases.compose_prompt.composer import (
+        load_prompt_version,
+    )
+
+    pattern = os.path.join(prompt_dir, "prompt_v*_*_*.json")
+    candidates = sorted(globlib.glob(pattern))
+    if not candidates:
+        log.info(
+            "prompt_start=best but no prompt artifact in %s; using v0",
+            prompt_dir,
+        )
+        return CLASSIFICATION_PROMPT_V0, ""
+
+    path = candidates[-1]
+    data = load_prompt_version(path)
+    text = data.get("text", CLASSIFICATION_PROMPT_V0.text)
+    version_str = str(data.get("version", "prompt-best"))
+    sha = data.get("hash", "")
+    artifact = type(CLASSIFICATION_PROMPT_V0)(
+        version=version_str,
+        layers=None,
+        text=text,
+        sha256=sha,
+    )
+    log.info("prompt_start=best: loaded %s from %s", version_str, path)
+    return artifact, path
+
+
 def load_initial_state(
     deps: RunCycleDeps,
     config: CycleConfig,
@@ -92,20 +131,26 @@ def load_initial_state(
 
     active_version = CLASSIFICATION_PROMPT_V0
     active_version_path = ""
-    try:
-        active_record = deps.prompt_repository.get_active()
-        version_str = str(active_record.get("version", "classify-v0"))
-        text = active_record.get("text", CLASSIFICATION_PROMPT_V0.text)
-        sha = active_record.get("hash", "")
-        active_version = type(CLASSIFICATION_PROMPT_V0)(
-            version=version_str,
-            layers=None,
-            text=text,
-            sha256=sha,
+
+    if config.prompt_start == "best":
+        active_version, active_version_path = _load_best_prompt(
+            os.path.join(config.output_dir, "prompt")
         )
-        active_version_path = str(active_record.get("path", ""))
-    except Exception as exc:
-        log.debug("no active prompt in repository, using v0: %s", exc)
+    else:
+        try:
+            active_record = deps.prompt_repository.get_active()
+            version_str = str(active_record.get("version", "classify-v0"))
+            text = active_record.get("text", CLASSIFICATION_PROMPT_V0.text)
+            sha = active_record.get("hash", "")
+            active_version = type(CLASSIFICATION_PROMPT_V0)(
+                version=version_str,
+                layers=None,
+                text=text,
+                sha256=sha,
+            )
+            active_version_path = str(active_record.get("path", ""))
+        except Exception as exc:
+            log.debug("no active prompt in repository, using v0: %s", exc)
 
     dataset_artifact = ""
     try:

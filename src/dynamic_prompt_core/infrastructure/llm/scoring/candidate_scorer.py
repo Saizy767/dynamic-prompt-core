@@ -13,6 +13,7 @@ occurred.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 
@@ -66,6 +67,18 @@ class LLMLogitCandidateScorer:
             return dict(describe_fn())
         return {}
 
+    async def aclose(self) -> None:
+        """Close HTTP sessions on adapters that own them.
+
+        Calls ``aclose()`` on the model and tokenizer adapters if they
+        expose it.  Safe to call on adapters without ``aclose()`` (Torch,
+        HuggingFace, LlamaCpp) — ``getattr`` returns ``None``.
+        """
+        for adapter in (self._model, self._tokenizer):
+            close_fn = getattr(adapter, "aclose", None)
+            if close_fn is not None:
+                await close_fn()
+
     async def score(
         self,
         text: str,
@@ -101,15 +114,25 @@ class LLMLogitCandidateScorer:
             t_prompt = time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            batch = self._tokenizer.encode_batch(prefixes, candidate_texts)
+            encode_fn = self._tokenizer.encode_batch
+            if inspect.iscoroutinefunction(encode_fn):
+                batch = await encode_fn(prefixes, candidate_texts)
+            else:
+                batch = encode_fn(prefixes, candidate_texts)
             t_tokenize = time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            batched_logits = await asyncio.to_thread(
-                self._model.forward_batch,
-                batch.input_ids,
-                batch.attention_mask,
-            )
+            forward_fn = self._model.forward_batch
+            if inspect.iscoroutinefunction(forward_fn):
+                batched_logits = await forward_fn(
+                    batch.input_ids, batch.attention_mask
+                )
+            else:
+                batched_logits = await asyncio.to_thread(
+                    forward_fn,
+                    batch.input_ids,
+                    batch.attention_mask,
+                )
             t_forward = time.perf_counter() - t0
 
             t0 = time.perf_counter()
