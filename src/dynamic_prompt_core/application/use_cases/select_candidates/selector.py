@@ -263,8 +263,9 @@ def write_candidates(
 ) -> str:
     """Serialize the candidate list to a JSON artifact.
 
-    Filename: rule_candidates_{run_id}_{prompt_version}_{timestamp}.json
+    Filename: rule_candidates/rule_candidates_{run_id}_{prompt_version}_{timestamp}.json
     """
+    output_dir = os.path.join(output_dir, "rule_candidates")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"rule_candidates_{run_id}_{prompt_version}_{timestamp}.json"

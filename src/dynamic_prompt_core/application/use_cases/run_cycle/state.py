@@ -55,10 +55,11 @@ def dump_state(
     run_repository: RunRepository,
     output_dir: str,
 ) -> str:
-    """Serialize ``state`` to ``state_{run_id}_{timestamp}.json``.
+    """Serialize ``state`` to ``state_cycle/state_{run_id}_{timestamp}.json``.
 
     Returns the path written.
     """
+    output_dir = os.path.join(output_dir, "state_cycle")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"state_{state.run_id}_{timestamp}.json"

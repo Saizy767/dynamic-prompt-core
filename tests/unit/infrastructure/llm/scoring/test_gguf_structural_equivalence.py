@@ -4,6 +4,7 @@ Task 2.6: assert ``LogitScorer`` receives identical structural semantics from
 the GGUF adapter and the existing contract double, and verify causal logit
 alignment with known token IDs.
 """
+
 from __future__ import annotations
 
 import math

@@ -4,6 +4,7 @@ Writes a single JSON file ``stop_decision_{run_id}_{timestamp}.json`` when the
 decision is ``stop``.  The artifact is self-contained and analyzable without
 recomputation.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,14 +30,17 @@ def write_stop_decision_artifact(
     run_repository: RunRepository,
     output_dir: str,
 ) -> str:
-    """Serialize a stop decision to ``stop_decision_{run_id}_{ts}.json``.
+    """Serialize a stop decision to ``report_cycle/stop_decision_{run_id}_{ts}.json``.
 
     Returns the path written.
     """
+    output_dir = os.path.join(output_dir, "report_cycle")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     run_id = decision.run_id
-    name = f"stop_decision_{run_id}_{timestamp}.json" if run_id else f"stop_decision_{timestamp}.json"
+    name = (
+        f"stop_decision_{run_id}_{timestamp}.json" if run_id else f"stop_decision_{timestamp}.json"
+    )
     path = os.path.join(output_dir, name)
 
     artifact: dict[str, Any] = {

@@ -177,6 +177,7 @@ async def compose_new_version(
     base_layers = load_base_layers(active_prompt)
     centroids = load_centroids(None)
     candidates_list = [candidate]
+    existing_rules = list(active_prompt.layers.rules) if active_prompt.layers else []
     new_artifact, rules_with_lineage, counters, rejected = await compose(
         candidates_list,
         base_layers,
@@ -184,6 +185,7 @@ async def compose_new_version(
         pc_config,
         cast(Any, deps.llm_client),
         active_prompt.version,
+        existing_rules=existing_rules,
     )
     source_candidates = [c["cluster_id"] for c in rules_with_lineage]
     artifact_path = write_prompt_version(
@@ -301,6 +303,7 @@ async def run_holdout(
         run_id=run_id,
         classify_prompt=prompt_artifact,
         duration=config.duration_for_round(round_number),
+        skip_extraction=True,
     )
     _, artifact_path = await runner.run()
     return compute_dev_metrics(artifact_path, config_path)
@@ -360,8 +363,10 @@ async def run_round(
 ) -> CycleState:
     """Execute one full round (steps 1–9) and return the updated state.
 
-    On rollback within the round, consume the candidate queue (steps 5–7)
-    until a candidate is accepted or the queue is exhausted.
+    Greedily accumulates rules from the candidate queue: each candidate's
+    rule is composed on top of the previously accepted rules, run on dev,
+    and compared against the current best. Accumulation continues on
+    accept and stops on degradation or when max_rules is reached.
     """
     round_number = state.round_counter + 1
     active_version_at_start = state.active_version.version
@@ -398,21 +403,36 @@ async def run_round(
     state.candidate_queue = list(candidate_queue)
     state.last_round_new_candidates = len(candidate_queue)
 
-    # Steps 5–7: Compose, run, decide — retry on rollback
+    # Steps 5–7: Greedy incremental rule accumulation
+    original_active = state.active_version
+    best_prompt = state.active_version
+    best_artifact_path = state.active_version_path
+    best_metrics = metrics_dev_active
+    accumulated_source_candidates: list[int] = []
+    any_accepted = False
     decision = "rollback"
     reason = ""
     new_version = ""
     changed: list[dict[str, Any]] = []
     metrics_dev_new: dict[str, Any] = {}
-    source_candidates: list[int] = []
+
+    pc_config = PromptComposerConfig.from_config(config_path)
 
     while state.candidate_queue:
+        current_rule_count = len(best_prompt.layers.rules) if best_prompt.layers else 0
+        if current_rule_count >= pc_config.max_rules:
+            log.info(
+                "max_rules limit (%d) reached; stopping accumulation",
+                pc_config.max_rules,
+            )
+            break
+
         candidate = state.candidate_queue.pop(0)
 
-        # Step 5: Compose new version
+        # Step 5: Compose new version (carries over existing rules from best_prompt)
         new_prompt, new_artifact_path, source_candidates = await compose_new_version(
             candidate,
-            state.active_version,
+            best_prompt,
             config_path,
             deps,
             state.run_id,
@@ -430,17 +450,9 @@ async def run_round(
         )
         metrics_dev_new = compute_dev_metrics(new_dev_path, config_path)
 
-        # Step 7–8: Decide
-        decision, reason, changed = decide_and_update(
-            state,
-            new_prompt,
-            new_artifact_path,
-            metrics_dev_new,
-            metrics_dev_active,
-            config,
-            config_path,
-            source_candidates,
-        )
+        # Step 7: Decide (compare new vs current best)
+        vc_config = VersionComparatorConfig.from_config(config_path)
+        decision, reason = decide(metrics_dev_new, best_metrics, vc_config)
 
         log_event(
             "decision",
@@ -449,35 +461,76 @@ async def run_round(
                 "decision": decision,
                 "reason": reason,
                 "new_version": new_version,
+                "cluster_id": candidate.get("cluster_id"),
+                "accumulated_rules": len(accumulated_source_candidates),
             },
             log_path,
         )
 
         if decision == "accept":
-            log_event("accept", round_number, {"version": new_version}, log_path)
-            break
-        log_event("rollback", round_number, {"version": new_version}, log_path)
+            any_accepted = True
+            best_prompt = new_prompt
+            best_artifact_path = new_artifact_path
+            best_metrics = metrics_dev_new
+            accumulated_source_candidates.extend(source_candidates)
+            log_event(
+                "accept",
+                round_number,
+                {
+                    "version": new_version,
+                    "cluster_id": candidate.get("cluster_id"),
+                    "total_rules": len(accumulated_source_candidates),
+                },
+                log_path,
+            )
+            continue
+
+        log_event(
+            "rollback",
+            round_number,
+            {"version": new_version, "cluster_id": candidate.get("cluster_id")},
+            log_path,
+        )
+        break
+
+    # Update state with the best version
+    state.active_version = best_prompt
+    state.active_version_path = best_artifact_path
+
+    # Update rollback counter and histories
+    if any_accepted:
+        state.rollback_counter = 0
+        state.accepted_history.append(active_version_at_start)
+    else:
+        state.rollback_counter += 1
+        state.rollback_history.append(
+            {
+                "round": round_number,
+                "version": new_version,
+                "reason": reason,
+            }
+        )
+
+    # Update in_prompt flags for all accepted candidates
+    if accumulated_source_candidates and state.thesis_bank_path:
+        accepted_cluster_ids = {str(cid) for cid in accumulated_source_candidates}
+        update_in_prompt_flags(state.thesis_bank_path, accepted_cluster_ids)
 
     # Holdout evaluation for both versions (logged only)
     metrics_holdout_active: dict[str, Any] = {}
     metrics_holdout_new: dict[str, Any] = {}
     try:
-        active_for_holdout = (
-            state.active_version
-            if decision == "accept"
-            else _restore_active(state, active_version_at_start)
-        )
         metrics_holdout_active = await run_holdout(
-            active_for_holdout,
+            original_active,
             config,
             config_path,
             deps,
             state.run_id,
             round_number=round_number,
         )
-        if new_version:
+        if new_version and best_prompt.version != original_active.version:
             metrics_holdout_new = await run_holdout(
-                state.active_version,
+                best_prompt,
                 config,
                 config_path,
                 deps,
@@ -488,14 +541,15 @@ async def run_round(
         log.warning("holdout evaluation failed: %s", exc)
 
     # Step 9: Write per-round report
-    next_action = "continue" if decision == "accept" else "rollback"
+    final_decision = "accept" if any_accepted else "rollback"
+    next_action = "continue" if any_accepted else "rollback"
     report_path = write_report(
         round_number=round_number,
         active_version_at_start=active_version_at_start,
-        new_version=new_version,
-        decision=decision,
+        new_version=best_prompt.version,
+        decision=final_decision,
         metrics_dev_active=metrics_dev_active,
-        metrics_dev_new=metrics_dev_new,
+        metrics_dev_new=best_metrics,
         metrics_holdout_active=metrics_holdout_active,
         metrics_holdout_new=metrics_holdout_new,
         rollback_counter=state.rollback_counter,
@@ -507,10 +561,10 @@ async def run_round(
     )
     state.latest_report_path = report_path
 
-    log_event("round_end", round_number, {"decision": decision, "report": report_path}, log_path)
+    log_event(
+        "round_end",
+        round_number,
+        {"decision": final_decision, "report": report_path},
+        log_path,
+    )
     return state
-
-
-def _restore_active(state: CycleState, version: str) -> PromptArtifact:
-    """Return the active version for holdout (the accepted one or the original)."""
-    return state.active_version

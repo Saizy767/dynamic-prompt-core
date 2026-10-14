@@ -449,6 +449,7 @@ async def compose(
     config: PromptComposerConfig,
     async_task: Any,
     base_version: str,
+    existing_rules: list[str] | None = None,
 ) -> tuple[PromptArtifact, list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
     """Run the full composition pipeline over all candidates.
 
@@ -460,6 +461,10 @@ async def compose(
     {cluster_id, text, cosine, threshold, reason} for each candidate that did
     not become an accepted rule (reason is one of distortion,
     empty_formulation).
+
+    When ``existing_rules`` is provided, they are prepended to the newly
+    formulated rules in the assembled prompt. ``rules_with_lineage`` contains
+    only the newly formulated rules, not the existing ones.
     """
     candidates_in = len(candidates)
     rules_formulated = 0
@@ -532,10 +537,11 @@ async def compose(
         accepted_rules.append(rule)
         rules_with_lineage.append({"cluster_id": cluster_id, "text": rule})
 
-    prompt_artifact = assemble_prompt(base_layers, accepted_rules, base_version)
+    all_rules = list(existing_rules or []) + accepted_rules
+    prompt_artifact = assemble_prompt(base_layers, all_rules, base_version)
 
     rejected_limits = 0
-    final_rules_count = len(accepted_rules)
+    final_rules_count = len(all_rules)
 
     counters = {
         "candidates_in": candidates_in,
@@ -564,8 +570,9 @@ def write_prompt_version(
 ) -> str:
     """Serialize the new prompt version to a JSON artifact.
 
-    Filename: prompt_v{version}_{run_id}_{timestamp}.json
+    Filename: prompt/prompt_v{version}_{run_id}_{timestamp}.json
     """
+    output_dir = os.path.join(output_dir, "prompt")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     version = prompt_artifact.version

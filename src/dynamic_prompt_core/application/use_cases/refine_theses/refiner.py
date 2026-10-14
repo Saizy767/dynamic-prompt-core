@@ -8,6 +8,7 @@ unstable phrasings, and add missed theses, then writes a reloadable
 theses_refined_*.jsonl artifact. Original Tiny-model theses are preserved
 verbatim; per-example teacher failures never abort the run.
 """
+
 from __future__ import annotations
 
 import json
@@ -100,8 +101,9 @@ def write_refined_artifact(
 ) -> str:
     """Write refined records to a jsonl artifact.
 
-    Filename: theses_refined_{run_id}_{prompt_version}_{timestamp}.jsonl
+    Filename: thesis_bank/theses_refined_{run_id}_{prompt_version}_{timestamp}.jsonl
     """
+    output_dir = os.path.join(output_dir, "thesis_bank")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"theses_refined_{run_id}_{prompt_version}_{timestamp}.jsonl"
@@ -169,7 +171,9 @@ async def refine_theses(
     continues.
     """
     rows = load_candidates(inp.results_path)
-    _append_log(inp.log_path, "load_candidates", None, {"count": len(rows), "path": inp.results_path})
+    _append_log(
+        inp.log_path, "load_candidates", None, {"count": len(rows), "path": inp.results_path}
+    )
 
     to_process: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -200,13 +204,15 @@ async def refine_theses(
         except Exception as exc:
             teacher_errors += 1
             _append_log(inp.log_path, "teacher_error", example_id, {"error": str(exc)})
-            records.append({
-                "id": example_id,
-                "theses_raw_tiny": theses_raw_tiny,
-                "theses_refined": theses_raw_tiny,
-                "filtered_out": [],
-                "added": [],
-            })
+            records.append(
+                {
+                    "id": example_id,
+                    "theses_raw_tiny": theses_raw_tiny,
+                    "theses_refined": theses_raw_tiny,
+                    "filtered_out": [],
+                    "added": [],
+                }
+            )
             continue
 
         prompt_tokens = 0
@@ -232,13 +238,9 @@ async def refine_theses(
         plan = RefinementPlanData(
             keep=list(review.keep),
             reformulate=[
-                ReformulatePair(from_=item["from"], to=item["to"])
-                for item in review.reformulate
+                ReformulatePair(from_=item["from"], to=item["to"]) for item in review.reformulate
             ],
-            drop=[
-                DropEntry(thesis=item["thesis"], reason=item["reason"])
-                for item in review.drop
-            ],
+            drop=[DropEntry(thesis=item["thesis"], reason=item["reason"]) for item in review.drop],
             add=list(review.add),
         )
 
@@ -286,27 +288,36 @@ async def refine_theses(
         reformulated += len(review.reformulate)
         added += len(added_list)
 
-        records.append({
-            "id": example_id,
-            "theses_raw_tiny": theses_raw_tiny,
-            "theses_refined": theses_refined,
-            "filtered_out": filtered_out,
-            "added": added_list,
-        })
+        records.append(
+            {
+                "id": example_id,
+                "theses_raw_tiny": theses_raw_tiny,
+                "theses_refined": theses_refined,
+                "filtered_out": filtered_out,
+                "added": added_list,
+            }
+        )
 
     for row in skipped:
-        records.append({
-            "id": row["id"],
-            "theses_raw_tiny": list(row.get("theses_raw", [])),
-            "theses_refined": list(row.get("theses_raw", [])),
-            "filtered_out": [],
-            "added": [],
-        })
+        records.append(
+            {
+                "id": row["id"],
+                "theses_raw_tiny": list(row.get("theses_raw", [])),
+                "theses_refined": list(row.get("theses_raw", [])),
+                "filtered_out": [],
+                "added": [],
+            }
+        )
 
     artifact_path = write_refined_artifact(
-        records, inp.run_id, inp.prompt_version, inp.output_dir,
+        records,
+        inp.run_id,
+        inp.prompt_version,
+        inp.output_dir,
     )
-    _append_log(inp.log_path, "write_artifact", None, {"path": artifact_path, "records": len(records)})
+    _append_log(
+        inp.log_path, "write_artifact", None, {"path": artifact_path, "records": len(records)}
+    )
 
     return RefineThesesResult(
         processed=processed,

@@ -198,6 +198,7 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     log_path = os.path.join(
         output_dir,
+        "log_cycle",
         f"cycle_log_{config.run_id or 'default'}_{ts}.jsonl",
     )
 

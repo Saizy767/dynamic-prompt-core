@@ -369,8 +369,9 @@ def write_dump(
 ) -> str:
     """Serialize the thesis bank and clusters to a JSON dump file.
 
-    Filename: thesis_bank_{run_id}_{prompt_version}_{timestamp}.json
+    Filename: thesis_bank/thesis_bank_{run_id}_{prompt_version}_{timestamp}.json
     """
+    output_dir = os.path.join(output_dir, "thesis_bank")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"thesis_bank_{run_id}_{prompt_version}_{timestamp}.json"

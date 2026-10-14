@@ -200,7 +200,7 @@ output_dir = "data/results"
 # computes metrics, updates the thesis bank, selects candidates, composes a new
 # version, runs it on dev, and decides accept/rollback. The cycle stops when
 # the round counter reaches this limit.
-max_rounds = 5
+max_rounds = 10
 # Number of dataset rows to process per round.
 #   0  — process all rows in the split (default).
 #   N  — process N rows in every round.
@@ -297,7 +297,7 @@ max_tokens = 512
 # Seconds to wait for a single teacher call before timing out.
 timeout = 60
 # Max retry attempts for retryable teacher errors (network, 5xx).
-max_retries = 3
+max_retries = 10
 # When true, downstream stages use theses_refined when the artifact exists;
 # when false, they fall back to theses_raw_tiny.
 use_refined = true

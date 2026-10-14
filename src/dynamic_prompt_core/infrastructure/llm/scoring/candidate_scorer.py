@@ -10,11 +10,13 @@ a single batched model forward pass.  The application sees only
 ``await scorer.score(text, candidates)`` and cannot tell whether batching
 occurred.
 """
+
 from __future__ import annotations
 
 import asyncio
 import inspect
 import logging
+import math
 import time
 
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
@@ -33,6 +35,21 @@ from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _softmax_percent(scores: list[float]) -> list[float]:
+    """Convert raw log-probability scores to percentages via softmax.
+
+    ``P(i) = e^{z_i} / sum(e^{z_j}) * 100``
+
+    Numerically stable: subtracts ``max(z)`` before exponentiation.
+    """
+    if not scores:
+        return []
+    max_z = max(scores)
+    exps = [math.exp(z - max_z) for z in scores]
+    total = sum(exps)
+    return [100.0 * e / total for e in exps]
 
 
 class LLMLogitCandidateScorer:
@@ -102,14 +119,13 @@ class LLMLogitCandidateScorer:
             t_total = time.perf_counter()
             log.info(
                 "CandidateScorer.score: START text=%d chars, %d candidates",
-                len(text), len(candidates),
+                len(text),
+                len(candidates),
             )
 
             t0 = time.perf_counter()
             prefix = self._prompt_builder.build_prefix(text)
-            candidate_texts = [
-                self._prompt_builder.build_candidate(c) for c in candidates
-            ]
+            candidate_texts = [self._prompt_builder.build_candidate(c) for c in candidates]
             prefixes = [prefix] * len(candidates)
             t_prompt = time.perf_counter() - t0
 
@@ -124,9 +140,7 @@ class LLMLogitCandidateScorer:
             t0 = time.perf_counter()
             forward_fn = self._model.forward_batch
             if inspect.iscoroutinefunction(forward_fn):
-                batched_logits = await forward_fn(
-                    batch.input_ids, batch.attention_mask
-                )
+                batched_logits = await forward_fn(batch.input_ids, batch.attention_mask)
             else:
                 batched_logits = await asyncio.to_thread(
                     forward_fn,
@@ -146,15 +160,16 @@ class LLMLogitCandidateScorer:
             adapter_profile = batched_logits.profile
             if adapter_profile is not None:
                 adapter_profile.scoring_ms = t_logit * 1e3
-                adapter_profile.scored_tokens = sum(
-                    len(c) for c in batch.candidate_token_ids
-                )
+                adapter_profile.scored_tokens = sum(len(c) for c in batch.candidate_token_ids)
 
             for candidate, score in zip(candidates, scores, strict=True):
                 log.debug(
-                    "CandidateScorer: candidate=%r score=%.6f",
-                    candidate.value, score,
+                    "CandidateScorer: candidate=%r raw_score=%.6f",
+                    candidate.value,
+                    score,
                 )
+
+            probabilities = _softmax_percent(scores)
 
             t_total = time.perf_counter() - t_total
             if adapter_profile is not None:
@@ -167,24 +182,32 @@ class LLMLogitCandidateScorer:
                     "logits_read=%.2fms convert=%.2fms validate=%.2fms "
                     "scoring=%.2fms | tokens: input=%d scored=%d "
                     "vocab=%d candidates=%d",
-                    len(text), len(candidates),
+                    len(text),
+                    len(candidates),
                     t_total * 1e3,
                     t_prompt * 1e3,
                     t_tokenize * 1e3,
                     t_forward * 1e3,
                     t_logit * 1e3,
-                    p.lock_wait_ms, p.reset_ms, p.eval_ms,
-                    p.logits_read_ms, p.logits_convert_ms, p.logits_validate_ms,
+                    p.lock_wait_ms,
+                    p.reset_ms,
+                    p.eval_ms,
+                    p.logits_read_ms,
+                    p.logits_convert_ms,
+                    p.logits_validate_ms,
                     p.scoring_ms,
-                    p.input_tokens, p.scored_tokens,
-                    p.vocab_size, p.candidate_count,
+                    p.input_tokens,
+                    p.scored_tokens,
+                    p.vocab_size,
+                    p.candidate_count,
                 )
             else:
                 log.info(
                     "CandidateScorer.score: END text=%d chars, %d candidates "
                     "total=%.2fms | prompt=%.2fms tokenize=%.2fms "
                     "forward=%.2fms logit=%.2fms",
-                    len(text), len(candidates),
+                    len(text),
+                    len(candidates),
                     t_total * 1e3,
                     t_prompt * 1e3,
                     t_tokenize * 1e3,
@@ -193,8 +216,8 @@ class LLMLogitCandidateScorer:
                 )
 
             return [
-                Judgment(candidate=candidate, score=score)
-                for candidate, score in zip(candidates, scores, strict=True)
+                Judgment(candidate=candidate, score=prob)
+                for candidate, prob in zip(candidates, probabilities, strict=True)
             ]
 
         except LLMScoringError as exc:

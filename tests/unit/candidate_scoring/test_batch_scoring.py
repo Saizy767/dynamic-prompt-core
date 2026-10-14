@@ -1,4 +1,5 @@
 """Tests for batch scoring: tokenizer, model, logit scorer, and scorer."""
+
 from __future__ import annotations
 
 import math
@@ -104,9 +105,7 @@ class StubBatchModel:
         batch_logits: list[SequenceLogits] = []
         for seq in input_ids:
             n = len(seq)
-            batch_logits.append(
-                SequenceLogits(logits=tuple(tuple(self._lp) for _ in range(n)))
-            )
+            batch_logits.append(SequenceLogits(logits=tuple(tuple(self._lp) for _ in range(n))))
         return BatchedLogits(items=tuple(batch_logits))
 
 
@@ -692,4 +691,5 @@ class TestPaddingInvariance:
         judgments_batch = await scorer_batch.score("text", [short, long])
         score_batch = judgments_batch[0].score
 
-        assert score_alone == pytest.approx(score_batch)
+        assert score_alone == pytest.approx(100.0)
+        assert score_batch == pytest.approx(50.0)

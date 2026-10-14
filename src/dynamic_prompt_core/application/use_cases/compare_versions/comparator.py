@@ -173,9 +173,7 @@ async def _run_version_async(
         config=runner_config,
         split=split,
         scorer=build_candidate_scorer(
-            scorer_backend_config_from_toml(
-                raw_config, default_model_path=default_model_path
-            )
+            scorer_backend_config_from_toml(raw_config, default_model_path=default_model_path)
         ),
         policy=ArgmaxClassificationPolicy(),
         candidates=[Candidate(v) for v in runner_config.candidates],
@@ -384,8 +382,9 @@ def write_decision(
 ) -> str:
     """Serialize the decision to a JSON artifact.
 
-    Filename: decision_{run_id}_v{new_version}_vs_v{active_version}_{timestamp}.json
+    Filename: decision_cycle/decision_{run_id}_v{new_version}_vs_v{active_version}_{timestamp}.json
     """
+    output_dir = os.path.join(output_dir, "decision_cycle")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"decision_{run_id}_v{new_version}_vs_v{active_version}_{timestamp}.json"

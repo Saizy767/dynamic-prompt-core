@@ -332,11 +332,11 @@ def discover_artifacts(run_id: str, config: CycleObserverConfig) -> dict[str, li
     import glob
 
     base = config.output_dir
-    reports = glob.glob(os.path.join(base, f"report_{run_id}_round*_*.json"))
-    decisions = glob.glob(os.path.join(base, f"decision_{run_id}_*_*.json"))
-    prompt_versions = glob.glob(os.path.join(base, f"prompt_v*_{run_id}_*.json"))
-    thesis_dumps = glob.glob(os.path.join(base, f"thesis_{run_id}_*_*.json"))
-    summaries = glob.glob(os.path.join(base, f"summary_{run_id}_*.json"))
+    reports = glob.glob(os.path.join(base, "report_cycle", f"report_{run_id}_round*_*.json"))
+    decisions = glob.glob(os.path.join(base, "decision_cycle", f"decision_{run_id}_*_*.json"))
+    prompt_versions = glob.glob(os.path.join(base, "prompt", f"prompt_v*_{run_id}_*.json"))
+    thesis_dumps = glob.glob(os.path.join(base, "thesis_bank", f"thesis_{run_id}_*_*.json"))
+    summaries = glob.glob(os.path.join(base, "report_cycle", f"summary_{run_id}_*.json"))
 
     return {
         "reports": _sort_report_paths(reports),
@@ -996,7 +996,7 @@ def write_report(report: ObservationReport, config: CycleObserverConfig) -> str:
 
 
 def _observer_log_path(run_id: str, config: CycleObserverConfig) -> str:
-    return os.path.join(config.output_dir, f"observer_log_{run_id}.jsonl")
+    return os.path.join(config.output_dir, "log_cycle", f"observer_log_{run_id}.jsonl")
 
 
 def log_event(

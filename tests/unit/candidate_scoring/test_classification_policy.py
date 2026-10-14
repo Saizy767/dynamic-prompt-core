@@ -1,4 +1,5 @@
 """Tests for the ClassificationPolicy protocol and ArgmaxClassificationPolicy."""
+
 from __future__ import annotations
 
 import typing
@@ -36,9 +37,9 @@ class TestClassificationPolicyProtocol:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert not alias.name.startswith(
-                        "dynamic_prompt_core.infrastructure"
-                    ), f"module imports infrastructure: {alias.name}"
+                    assert not alias.name.startswith("dynamic_prompt_core.infrastructure"), (
+                        f"module imports infrastructure: {alias.name}"
+                    )
             elif isinstance(node, ast.ImportFrom):
                 assert node.module is None or not node.module.startswith(
                     "dynamic_prompt_core.infrastructure"
@@ -59,15 +60,29 @@ class TestArgmaxClassificationPolicy:
         result = self.policy.classify(judgments)
         assert result.selected == Candidate("a")
 
-    def test_tie_returns_first_in_order(self) -> None:
+    def test_tie_selects_randomly_among_tied(self) -> None:
         judgments = _judgments(("a", 0.8), ("b", 0.8), ("c", 0.5))
-        result = self.policy.classify(judgments)
-        assert result.selected == Candidate("a")
+        results = {self.policy.classify(judgments).selected for _ in range(50)}
+        assert results <= {Candidate("a"), Candidate("b")}
+        assert Candidate("c") not in results
 
-    def test_tie_at_end_returns_first_in_order(self) -> None:
+    def test_tie_at_end_selects_randomly_among_tied(self) -> None:
         judgments = _judgments(("a", 0.5), ("b", 0.8), ("c", 0.8))
-        result = self.policy.classify(judgments)
-        assert result.selected == Candidate("b")
+        results = {self.policy.classify(judgments).selected for _ in range(50)}
+        assert results <= {Candidate("b"), Candidate("c")}
+        assert Candidate("a") not in results
+
+    def test_tie_with_seed_is_deterministic(self) -> None:
+        import random as _random
+
+        rng = _random.Random(42)
+        policy = ArgmaxClassificationPolicy(rng=rng)
+        judgments = _judgments(("a", 0.8), ("b", 0.8))
+        r1 = policy.classify(judgments).selected
+        rng2 = _random.Random(42)
+        policy2 = ArgmaxClassificationPolicy(rng=rng2)
+        r2 = policy2.classify(judgments).selected
+        assert r1 == r2
 
     def test_empty_judgments_raise_value_error(self) -> None:
         with pytest.raises(ValueError):

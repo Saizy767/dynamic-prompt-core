@@ -1,4 +1,5 @@
 """Tests for the LogitScorer: causal alignment and mean log-probability."""
+
 from __future__ import annotations
 
 import math
@@ -42,8 +43,10 @@ class TestCausalAlignment:
         # prefix 3 tokens, candidate [c0, c1]
         # c0 from logits[2], c1 from logits[3]
         seq = _seq(
-            _valid_logprobs(0.5), _valid_logprobs(0.5),
-            _valid_logprobs(0.9), _valid_logprobs(0.8),
+            _valid_logprobs(0.5),
+            _valid_logprobs(0.5),
+            _valid_logprobs(0.9),
+            _valid_logprobs(0.8),
         )
         score = scorer.score(3, [0, 0], seq)
         expected = (math.log(0.9) + math.log(0.8)) / 2
@@ -52,8 +55,10 @@ class TestCausalAlignment:
     def test_not_reading_same_position(self) -> None:
         # With prefix_token_count=3, c0 reads position 2, not position 3
         seq = _seq(
-            _valid_logprobs(0.5), _valid_logprobs(0.5),
-            _valid_logprobs(0.9), _valid_logprobs(0.1),
+            _valid_logprobs(0.5),
+            _valid_logprobs(0.5),
+            _valid_logprobs(0.9),
+            _valid_logprobs(0.1),
         )
         score = scorer.score(3, [0], seq)
         assert score == pytest.approx(math.log(0.9))  # from position 2, not 3

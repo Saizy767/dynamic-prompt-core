@@ -179,6 +179,7 @@ class BaselineRunner:
         duration: int | None = None,
         classify_prompt: PromptArtifact | None = None,
         backend_metadata: dict[str, Any] | None = None,
+        skip_extraction: bool = False,
     ) -> None:
         self._task = task
         self._scorer = scorer
@@ -193,6 +194,7 @@ class BaselineRunner:
         self._checkpoint_interval = config.checkpoint_interval
         self._timestamp: str | None = None
         self._backend_metadata = backend_metadata
+        self._skip_extraction = skip_extraction
 
         if classify_prompt is not None:
             self._classify_prompt = classify_prompt
@@ -217,12 +219,21 @@ class BaselineRunner:
         }
 
     # -- paths -------------------------------------------------------------- #
+    def _results_dir(self) -> str:
+        return os.path.join(self._output_dir, "result_cycle")
+
+    def _log_dir(self) -> str:
+        return os.path.join(self._output_dir, "log_cycle")
+
+    def _manifest_dir(self) -> str:
+        return os.path.join(self._output_dir, "manifest_cycle")
+
     def _find_existing_checkpoint(self) -> str | None:
         """Glob for a .tmp checkpoint matching run_id + prompt_version + split."""
         import glob
 
         pattern = f"results_{self._run_id}_{self._prompt_version}_{self._split}_*.jsonl.tmp"
-        matches = glob.glob(os.path.join(self._output_dir, pattern))
+        matches = glob.glob(os.path.join(self._results_dir(), pattern))
         return matches[0] if matches else None
 
     def _init_timestamp(self) -> None:
@@ -244,23 +255,22 @@ class BaselineRunner:
             f"results_{self._run_id}_{self._prompt_version}_"
             f"{self._split}_{self._timestamp}.jsonl.tmp"
         )
-        return os.path.join(self._output_dir, name)
+        return os.path.join(self._results_dir(), name)
 
     def _artifact_path(self) -> str:
         name = (
-            f"results_{self._run_id}_{self._prompt_version}_{self._split}_{self._timestamp}.jsonl"
+            f"results_{self._run_id}_{self._prompt_version}_"
+            f"{self._split}_{self._timestamp}.jsonl"
         )
-        return os.path.join(self._output_dir, name)
+        return os.path.join(self._results_dir(), name)
 
     def _request_log_path(self) -> str:
         name = f"requests_{self._run_id}_{self._split}.jsonl"
-        return os.path.join(self._output_dir, name)
+        return os.path.join(self._log_dir(), name)
 
     def _manifest_path(self) -> str:
-        name = (
-            f"manifest_{self._run_id}_{self._prompt_version}_{self._split}.json"
-        )
-        return os.path.join(self._output_dir, name)
+        name = f"manifest_{self._run_id}_{self._prompt_version}_{self._split}.json"
+        return os.path.join(self._manifest_dir(), name)
 
     def _resolve_backend_metadata(self) -> dict[str, Any] | None:
         backend_metadata = self._backend_metadata
@@ -293,6 +303,7 @@ class BaselineRunner:
             dataset_fingerprint=dataset_fingerprint,
             timestamp=self._timestamp,
         )
+        os.makedirs(self._manifest_dir(), exist_ok=True)
         write_manifest(self._manifest_path(), meta)
 
     def _verify_resume_identity(self) -> None:
@@ -389,42 +400,56 @@ class BaselineRunner:
     ) -> None:
         assert self._semaphore is not None
         async with self._semaphore:
-            try:
-                extract_cr = await self._task.extract_theses_detailed(
-                    session,
-                    example.text,
-                    ThesisExtraction,
-                    system_prompt=self._extract_prompt.text,
-                    true_val=example.label,
-                )
-            except Exception as exc:
-                log.exception("extract_theses crashed for id=%s: %s", example.id, exc)
+            if self._skip_extraction:
                 extract_cr = CallResult(
                     parsed=None,
                     raw_content=None,
                     latency_ms=0.0,
                     parse_status=None,
                     status=ResponseStatus.UNEXPECTED_SHAPE,
-                    error=str(exc),
                 )
+                extract_status = "skipped"
+                theses_raw: list[str] = []
+                theses_norm: list[str] = []
+            else:
+                try:
+                    extract_cr = await self._task.extract_theses_detailed(
+                        session,
+                        example.text,
+                        ThesisExtraction,
+                        system_prompt=self._extract_prompt.text,
+                        true_val=example.label,
+                    )
+                except Exception as exc:
+                    log.exception("extract_theses crashed for id=%s: %s", example.id, exc)
+                    extract_cr = CallResult(
+                        parsed=None,
+                        raw_content=None,
+                        latency_ms=0.0,
+                        parse_status=None,
+                        status=ResponseStatus.UNEXPECTED_SHAPE,
+                        error=str(exc),
+                    )
 
-            extract_status, extract_parsed = _map_call_status(extract_cr, ThesisExtraction)
+                extract_status, extract_parsed = _map_call_status(extract_cr, ThesisExtraction)
 
-            theses_raw = list(extract_parsed.theses) if extract_parsed else []
-            theses_norm = normalize_theses(theses_raw, self._language) if theses_raw else []
+                theses_raw = list(extract_parsed.theses) if extract_parsed else []
+                theses_norm = normalize_theses(theses_raw, self._language) if theses_raw else []
 
             classify_start = time.monotonic()
             try:
                 score_start = time.monotonic()
                 log.info(
                     "BaselineRunner: scorer.score START id=%s, %d candidates",
-                    example.id, len(self._candidates),
+                    example.id,
+                    len(self._candidates),
                 )
                 judgments = await self._scorer.score(example.text, self._candidates)
                 score_latency_ms = (time.monotonic() - score_start) * 1000
                 log.info(
                     "BaselineRunner: scorer.score END id=%s in %.2fms",
-                    example.id, score_latency_ms,
+                    example.id,
+                    score_latency_ms,
                 )
 
                 policy_start = time.monotonic()
@@ -432,7 +457,8 @@ class BaselineRunner:
                 policy_latency_ms = (time.monotonic() - policy_start) * 1000
                 log.info(
                     "BaselineRunner: policy.classify id=%s in %.2fms",
-                    example.id, policy_latency_ms,
+                    example.id,
+                    policy_latency_ms,
                 )
                 classify_status = _RUNNER_STATUS_OK
                 selected_candidate = classification.selected.value
@@ -476,7 +502,8 @@ class BaselineRunner:
                 raw_extract=extract_cr.raw_content,
             )
 
-            self._update_stats(extract_cr, extract_status)
+            if not self._skip_extraction:
+                self._update_stats(extract_cr, extract_status)
 
             results[index] = row
             await self._checkpoint_write(row)
@@ -498,6 +525,9 @@ class BaselineRunner:
     # -- main run ----------------------------------------------------------- #
     async def run(self) -> tuple[list[ResultRow], str]:
         os.makedirs(self._output_dir, exist_ok=True)
+        os.makedirs(self._results_dir(), exist_ok=True)
+        os.makedirs(self._log_dir(), exist_ok=True)
+        os.makedirs(self._manifest_dir(), exist_ok=True)
         self._init_timestamp()
 
         if not self._dataset_artifact:

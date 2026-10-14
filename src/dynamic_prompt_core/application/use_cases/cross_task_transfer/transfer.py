@@ -613,7 +613,7 @@ async def _run_target_cycle(
 
 def _load_cycle_summary_metrics(output_dir: str, run_id: str) -> tuple[dict[str, Any], str]:
     """Load the final dev metrics and stop reason from a cycle's summary file."""
-    pattern = os.path.join(output_dir, f"summary_{run_id}_*.json")
+    pattern = os.path.join(output_dir, "report_cycle", f"summary_{run_id}_*.json")
     matches = sorted(glob.glob(pattern))
     if not matches:
         return {}, ""
@@ -627,7 +627,7 @@ def _load_cycle_summary_metrics(output_dir: str, run_id: str) -> tuple[dict[str,
 
 def _load_first_round_metrics(output_dir: str, run_id: str) -> dict[str, Any]:
     """Load the new version's dev metrics from the first round's report."""
-    pattern = os.path.join(output_dir, f"report_{run_id}_round1_*.json")
+    pattern = os.path.join(output_dir, "report_cycle", f"report_{run_id}_round1_*.json")
     matches = sorted(glob.glob(pattern))
     if not matches:
         return {}
@@ -659,11 +659,12 @@ def write_transfer_artifact(
 ) -> str:
     """Write the transfer artifact JSON (design D10).
 
-    Filename: transfer_{source_task_id}_to_{target_task_id}_{timestamp}.json
+    Filename: transfer/transfer_{source_task_id}_to_{target_task_id}_{timestamp}.json
     """
-    os.makedirs(config.output_dir, exist_ok=True)
+    output_dir = os.path.join(config.output_dir, "transfer")
+    os.makedirs(output_dir, exist_ok=True)
     name = f"transfer_{config.source_task.task_id}_to_{config.target_task.task_id}_{timestamp}.json"
-    path = os.path.join(config.output_dir, name)
+    path = os.path.join(output_dir, name)
 
     dump = {
         "source_task_id": config.source_task.task_id,
@@ -728,9 +729,10 @@ def write_effectiveness_report(
 ) -> str:
     """Write the effectiveness report JSON (design D11).
 
-    Filename: transfer_report_{source_task_id}_to_{target_task_id}_{timestamp}.json
+    Filename: transfer/transfer_report_{source_task_id}_to_{target_task_id}_{timestamp}.json
     """
-    os.makedirs(config.output_dir, exist_ok=True)
+    output_dir = os.path.join(config.output_dir, "transfer")
+    os.makedirs(output_dir, exist_ok=True)
     name = (
         f"transfer_report_{config.source_task.task_id}_to_"
         f"{config.target_task.task_id}_{timestamp}.json"

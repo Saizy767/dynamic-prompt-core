@@ -8,6 +8,7 @@ The optimized path (selective extraction) is disabled by the capability
 probe, so both paths use the full-read fallback — these tests pin the
 scoring contract so any future optimization can be validated against them.
 """
+
 from __future__ import annotations
 
 import math

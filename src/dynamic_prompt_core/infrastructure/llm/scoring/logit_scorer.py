@@ -12,9 +12,11 @@ position ``i + 1``.  Given prefix tokens ``p_0 ... p_m`` and candidate tokens
 The score is the arithmetic mean of these log-probabilities.  Mean (not sum)
 normalizes by candidate token count, avoiding systematic length bias.
 
-The score is a ranking/evidence signal, not a probability.  No
-softmax-to-probability claim is made.
+The score is a ranking/evidence signal (raw mean log-probability, typically
+negative).  Conversion to probability is done downstream by the candidate
+scer via softmax over all candidates.
 """
+
 from __future__ import annotations
 
 import math
@@ -64,7 +66,7 @@ class LogitScorer:
     ``candidate_token_ids`` (the candidate's token IDs), and the model's
     ``SequenceLogits``, the scorer extracts each candidate token's
     log-probability from the preceding position's logit distribution and
-    returns their arithmetic mean.
+    returns their arithmetic mean (raw mean log-probability).
     """
 
     def score(
@@ -87,17 +89,14 @@ class LogitScorer:
             position_logits = sequence_logits.logits[position]
             if token_id < 0 or token_id >= len(position_logits):
                 raise LLMScoringError(
-                    f"token id {token_id} out of range for vocab size "
-                    f"{len(position_logits)}"
+                    f"token id {token_id} out of range for vocab size {len(position_logits)}"
                 )
             log_probs.append(_log_probability(position_logits, token_id))
 
         result = sum(log_probs) / len(log_probs)
 
         if math.isnan(result) or math.isinf(result):
-            raise LLMScoringError(
-                f"computed score is not a finite number: {result!r}"
-            )
+            raise LLMScoringError(f"computed score is not a finite number: {result!r}")
 
         return result
 

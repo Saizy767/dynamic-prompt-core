@@ -1,4 +1,5 @@
 """Unit tests for BaselineRunner classification via candidate scoring."""
+
 from __future__ import annotations
 
 import asyncio
@@ -215,3 +216,46 @@ async def test_judgment_scores_populated_from_classification_judgments() -> None
     row = results[0]
     assert row is not None
     assert row.judgment_scores == {"0": -1.5, "1": -0.3}
+
+
+@pytest.mark.asyncio
+async def test_runner_skip_extraction() -> None:
+    """When skip_extraction=True, thesis extraction is skipped and only
+    candidate-scoring classification runs."""
+    candidates = _make_candidates()
+    scorer = AsyncMock()
+    scorer.score.return_value = [
+        Judgment(candidate=candidates[0], score=-1.5),
+        Judgment(candidate=candidates[1], score=-0.3),
+    ]
+    task = MagicMock()
+    task.extract_theses_detailed = AsyncMock()
+
+    runner = BaselineRunner(
+        task=task,
+        config=RunnerConfig(),
+        split="holdout",
+        scorer=scorer,
+        policy=ArgmaxClassificationPolicy(),
+        candidates=candidates,
+        skip_extraction=True,
+    )
+    runner._checkpoint_write = AsyncMock()
+    runner._semaphore = asyncio.Semaphore(1)
+
+    example = _FakeRecord(id=1, text="some text", label=1)
+    results: list[ResultRow | None] = [None]
+
+    await runner._process_example(MagicMock(), example, 0, results)
+
+    task.extract_theses_detailed.assert_not_called()
+    scorer.score.assert_called_once()
+
+    row = results[0]
+    assert row is not None
+    assert row.extract_status == "skipped"
+    assert row.theses_raw == []
+    assert row.theses_norm == []
+    assert row.extract_latency_ms == 0.0
+    assert row.raw_extract is None
+    assert row.classify_status == "ok"

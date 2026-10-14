@@ -59,7 +59,8 @@ def write_report(
     run_repository: RunRepository,
     output_dir: str,
 ) -> str:
-    """Serialize a per-round report to ``report_{run_id}_round{N}_{ts}.json``."""
+    """Serialize a per-round report to ``report_cycle/report_{run_id}_round{N}_{ts}.json``."""
+    output_dir = os.path.join(output_dir, "report_cycle")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"report_{run_id}_round{round_number}_{timestamp}.json"
@@ -104,11 +105,12 @@ def write_summary(
     run_repository: RunRepository,
     output_dir: str,
 ) -> str:
-    """Serialize a final summary to ``summary_{run_id}_{ts}.json``."""
+    """Serialize a final summary to ``report_cycle/summary_{run_id}_{ts}.json``."""
     if stop_reason not in VALID_STOP_REASONS:
         raise CycleOrchestratorError(
             f"invalid stop_reason {stop_reason!r}; expected one of {sorted(VALID_STOP_REASONS)}"
         )
+    output_dir = os.path.join(output_dir, "report_cycle")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"summary_{run_id}_{timestamp}.json"

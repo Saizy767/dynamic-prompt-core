@@ -113,13 +113,12 @@ def test_run_round_executes_steps_and_writes_report(
                 f"{STEPS}.run_new_on_dev", new_callable=AsyncMock, return_value="new_results.jsonl"
             )
         )
-        stack.enter_context(
-            patch(f"{STEPS}.decide_and_update", return_value=("accept", "improved", []))
-        )
+        stack.enter_context(patch(f"{STEPS}.decide", return_value=("accept", "improved")))
         stack.enter_context(
             patch(f"{STEPS}.run_holdout", new_callable=AsyncMock, return_value={"accuracy": 0.5})
         )
         stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
+        stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
 
         updated = asyncio.run(run_round(state, deps, cycle_config, "config.toml", log_path))
 
@@ -146,8 +145,9 @@ def test_run_active_on_dev_threads_scorer_policy_candidates(build_mock_deps):
         async def run(self):
             return [], "fake.jsonl"
 
-    with patch(f"{STEPS}.BaselineRunner", _CapturingRunner), patch(
-        f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()
+    with (
+        patch(f"{STEPS}.BaselineRunner", _CapturingRunner),
+        patch(f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()),
     ):
         asyncio.run(run_active_on_dev(state, deps, config, "config.toml"))
 
@@ -175,13 +175,12 @@ def test_run_new_on_dev_threads_scorer_policy_candidates(build_mock_deps):
         async def run(self):
             return [], "fake.jsonl"
 
-    with patch(f"{STEPS}.BaselineRunner", _CapturingRunner), patch(
-        f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()
+    with (
+        patch(f"{STEPS}.BaselineRunner", _CapturingRunner),
+        patch(f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()),
     ):
         asyncio.run(
-            run_new_on_dev(
-                CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"
-            )
+            run_new_on_dev(CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run")
         )
 
     assert captured["scorer"] is deps.candidate_scorer
@@ -206,18 +205,17 @@ def test_run_holdout_threads_scorer_policy_candidates(build_mock_deps):
         async def run(self):
             return [], "fake.jsonl"
 
-    with patch(f"{STEPS}.BaselineRunner", _CapturingRunner), patch(
-        f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()
-    ), patch(f"{STEPS}.compute_dev_metrics", return_value={"accuracy": 0.5}):
-        asyncio.run(
-            run_holdout(
-                CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"
-            )
-        )
+    with (
+        patch(f"{STEPS}.BaselineRunner", _CapturingRunner),
+        patch(f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()),
+        patch(f"{STEPS}.compute_dev_metrics", return_value={"accuracy": 0.5}),
+    ):
+        asyncio.run(run_holdout(CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"))
 
     assert captured["scorer"] is deps.candidate_scorer
     assert captured["policy"] is deps.classification_policy
     assert list(deps.candidates) == captured["candidates"]
+    assert captured["skip_extraction"] is True
 
 
 def test_all_runners_receive_same_scorer_and_policy_instances(build_mock_deps):
@@ -243,20 +241,16 @@ def test_all_runners_receive_same_scorer_and_policy_instances(build_mock_deps):
         async def run(self):
             return [], "fake.jsonl"
 
-    with patch(f"{STEPS}.BaselineRunner", _CapturingRunner), patch(
-        f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()
-    ), patch(f"{STEPS}.compute_dev_metrics", return_value={"accuracy": 0.5}):
+    with (
+        patch(f"{STEPS}.BaselineRunner", _CapturingRunner),
+        patch(f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()),
+        patch(f"{STEPS}.compute_dev_metrics", return_value={"accuracy": 0.5}),
+    ):
         asyncio.run(run_active_on_dev(state, deps, config, "config.toml"))
         asyncio.run(
-            run_new_on_dev(
-                CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"
-            )
+            run_new_on_dev(CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run")
         )
-        asyncio.run(
-            run_holdout(
-                CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"
-            )
-        )
+        asyncio.run(run_holdout(CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"))
 
     assert len(captured_list) == 3
     scorers = [c["scorer"] for c in captured_list]
@@ -322,6 +316,233 @@ def test_run_cycle_deps_requires_candidates():
             candidate_scorer=MagicMock(),
             classification_policy=MagicMock(),
         )
+
+
+def _make_prompt_with_rules(version: str, rules: list[str]):
+    """Build a PromptArtifact with the given rules for testing."""
+    from dynamic_prompt_core.domain.prompts.base import PromptArtifact, PromptLayer, render
+
+    layers = PromptLayer(
+        role="test role",
+        task="test task",
+        rules=rules,
+        output_contract="test contract",
+        fallback="test fallback",
+    )
+    return PromptArtifact(version=version, layers=layers, text=render(layers))
+
+
+def test_run_round_accumulates_rules_on_accept(
+    build_mock_deps,
+    cycle_config,
+    tmp_output_dir,
+):
+    """run_round accumulates rules from multiple candidates when both improve metrics."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+
+    deps = build_mock_deps()
+    state = CycleState(run_id="test-run")
+    log_path = os.path.join(tmp_output_dir, "cycle_log.jsonl")
+    os.makedirs(tmp_output_dir, exist_ok=True)
+
+    mock_runner = AsyncMock()
+    mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
+    metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
+
+    prompt_v1 = _make_prompt_with_rules("classify-v1", ["rule-1"])
+    prompt_v2 = _make_prompt_with_rules("classify-v2", ["rule-1", "rule-2"])
+
+    mock_pc_config = MagicMock(max_rules=10)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
+        stack.enter_context(patch(f"{STEPS}.compute_dev_metrics", return_value=metrics))
+        stack.enter_context(
+            patch(
+                f"{STEPS}.update_thesis_collection",
+                return_value=("thesis.json", "clusters.json"),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.select_candidates",
+                return_value=("cands.json", [{"cluster_id": 1}, {"cluster_id": 2}]),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.compose_new_version",
+                new_callable=AsyncMock,
+                side_effect=[
+                    (prompt_v1, "prompt_v1.json", [1]),
+                    (prompt_v2, "prompt_v2.json", [2]),
+                ],
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.run_new_on_dev",
+                new_callable=AsyncMock,
+                return_value="new_results.jsonl",
+            )
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.decide", side_effect=[("accept", "improved"), ("accept", "improved")])
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.PromptComposerConfig.from_config", return_value=mock_pc_config)
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.run_holdout", new_callable=AsyncMock, return_value={"accuracy": 0.5})
+        )
+        stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
+        stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
+
+        updated = asyncio.run(run_round(state, deps, cycle_config, "config.toml", log_path))
+
+    assert updated.active_version.version == "classify-v2"
+    assert updated.rollback_counter == 0
+
+
+def test_run_round_stops_on_degradation(
+    build_mock_deps,
+    cycle_config,
+    tmp_output_dir,
+):
+    """run_round keeps the first accepted rule when the second candidate degrades."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+
+    deps = build_mock_deps()
+    state = CycleState(run_id="test-run")
+    log_path = os.path.join(tmp_output_dir, "cycle_log.jsonl")
+    os.makedirs(tmp_output_dir, exist_ok=True)
+
+    mock_runner = AsyncMock()
+    mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
+    metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
+
+    prompt_v1 = _make_prompt_with_rules("classify-v1", ["rule-1"])
+    prompt_v2 = _make_prompt_with_rules("classify-v2", ["rule-1", "rule-2"])
+
+    mock_pc_config = MagicMock(max_rules=10)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
+        stack.enter_context(patch(f"{STEPS}.compute_dev_metrics", return_value=metrics))
+        stack.enter_context(
+            patch(
+                f"{STEPS}.update_thesis_collection",
+                return_value=("thesis.json", "clusters.json"),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.select_candidates",
+                return_value=("cands.json", [{"cluster_id": 1}, {"cluster_id": 2}]),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.compose_new_version",
+                new_callable=AsyncMock,
+                side_effect=[
+                    (prompt_v1, "prompt_v1.json", [1]),
+                    (prompt_v2, "prompt_v2.json", [2]),
+                ],
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.run_new_on_dev",
+                new_callable=AsyncMock,
+                return_value="new_results.jsonl",
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.decide",
+                side_effect=[("accept", "improved"), ("rollback", "degraded")],
+            )
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.PromptComposerConfig.from_config", return_value=mock_pc_config)
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.run_holdout", new_callable=AsyncMock, return_value={"accuracy": 0.5})
+        )
+        stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
+        stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
+
+        updated = asyncio.run(run_round(state, deps, cycle_config, "config.toml", log_path))
+
+    assert updated.active_version.version == "classify-v1"
+    assert updated.rollback_counter == 0
+
+
+def test_run_round_no_acceptance_increments_rollback(
+    build_mock_deps,
+    cycle_config,
+    tmp_output_dir,
+):
+    """run_round increments rollback counter when no candidate is accepted."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+
+    deps = build_mock_deps()
+    state = CycleState(run_id="test-run")
+    log_path = os.path.join(tmp_output_dir, "cycle_log.jsonl")
+    os.makedirs(tmp_output_dir, exist_ok=True)
+
+    mock_runner = AsyncMock()
+    mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
+    metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
+
+    prompt_v1 = _make_prompt_with_rules("classify-v1", ["rule-1"])
+
+    mock_pc_config = MagicMock(max_rules=10)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
+        stack.enter_context(patch(f"{STEPS}.compute_dev_metrics", return_value=metrics))
+        stack.enter_context(
+            patch(
+                f"{STEPS}.update_thesis_collection",
+                return_value=("thesis.json", "clusters.json"),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.select_candidates",
+                return_value=("cands.json", [{"cluster_id": 1}, {"cluster_id": 2}]),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.compose_new_version",
+                new_callable=AsyncMock,
+                return_value=(prompt_v1, "prompt_v1.json", [1]),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.run_new_on_dev",
+                new_callable=AsyncMock,
+                return_value="new_results.jsonl",
+            )
+        )
+        stack.enter_context(patch(f"{STEPS}.decide", return_value=("rollback", "degraded")))
+        stack.enter_context(
+            patch(f"{STEPS}.PromptComposerConfig.from_config", return_value=mock_pc_config)
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.run_holdout", new_callable=AsyncMock, return_value={"accuracy": 0.5})
+        )
+        stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
+        stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
+
+        updated = asyncio.run(run_round(state, deps, cycle_config, "config.toml", log_path))
+
+    assert updated.rollback_counter == 1
+    assert updated.active_version.version == CLASSIFICATION_PROMPT_V0.version
 
 
 def test_candidate_source_of_truth_in_steps():
