@@ -137,7 +137,7 @@ class _EmbeddingClientAdapter:
             compute_embedding,
         )
 
-        return compute_embedding(text, "all-MiniLM-L6-v2").tolist()
+        return compute_embedding(text, "all-MiniLM-L6-v2", device="auto").tolist()
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [self.embed_one(t) for t in texts]

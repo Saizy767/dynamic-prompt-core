@@ -38,6 +38,9 @@ DEFAULT_COSINE_LOWER = 0.60
 DEFAULT_COSINE_UPPER = 0.75
 DEFAULT_MANHATTAN_THRESHOLD = 8.0
 DEFAULT_MAX_CLUSTERS = 20
+DEFAULT_EMBEDDING_DEVICE = "auto"
+DEFAULT_EMBEDDING_BATCH_SIZE = 32
+_VALID_EMBEDDING_DEVICES = frozenset({"auto", "mps", "cuda", "cpu"})
 
 REQUIRED_FIELDS = (
     "id",
@@ -63,6 +66,8 @@ class ThesisAnalyzerConfig:
     cosine_upper: float = DEFAULT_COSINE_UPPER
     manhattan_threshold: float = DEFAULT_MANHATTAN_THRESHOLD
     max_clusters: int = DEFAULT_MAX_CLUSTERS
+    embedding_device: str = DEFAULT_EMBEDDING_DEVICE
+    embedding_batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE
     output_dir: str = DEFAULT_OUTPUT_DIR
 
     @classmethod
@@ -70,12 +75,20 @@ class ThesisAnalyzerConfig:
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
         t = config.get("thesis_analyzer", {})
+        embedding_device = t.get("embedding_device", DEFAULT_EMBEDDING_DEVICE)
+        if embedding_device not in _VALID_EMBEDDING_DEVICES:
+            raise ThesisAnalyzerError(
+                f"invalid embedding_device {embedding_device!r}; "
+                f"must be one of {sorted(_VALID_EMBEDDING_DEVICES)}"
+            )
         return cls(
             embedding_model=t.get("embedding_model", DEFAULT_EMBEDDING_MODEL),
             cosine_lower=float(t.get("cosine_lower", DEFAULT_COSINE_LOWER)),
             cosine_upper=float(t.get("cosine_upper", DEFAULT_COSINE_UPPER)),
             manhattan_threshold=float(t.get("manhattan_threshold", DEFAULT_MANHATTAN_THRESHOLD)),
             max_clusters=int(t.get("max_clusters", DEFAULT_MAX_CLUSTERS)),
+            embedding_device=embedding_device,
+            embedding_batch_size=int(t.get("embedding_batch_size", DEFAULT_EMBEDDING_BATCH_SIZE)),
             output_dir=t.get("output_dir", DEFAULT_OUTPUT_DIR),
         )
 
@@ -118,15 +131,68 @@ def filter_ok_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 _embedding_model: object | None = None
 _embedding_model_name: str | None = None
+_embedding_model_device: str | None = None
 
 
-def _get_embedding_model(model_name: str) -> Any:
+def resolve_embedding_device(device: str) -> str:
+    """Resolve an embedding device request to a concrete device string.
+
+    ``"auto"`` selects the first available GPU backend (MPS, then CUDA),
+    falling back to CPU.  Explicit ``"mps"`` or ``"cuda"`` fall back to CPU
+    with a WARNING when the backend is unavailable.  ``"cpu"`` passes through.
+    """
+    if device == "cpu":
+        return "cpu"
+    if device == "auto":
+        try:
+            import torch
+
+            if torch.backends.mps.is_available():
+                return "mps"
+            if torch.cuda.is_available():
+                return "cuda"
+        except ImportError:
+            pass
+        return "cpu"
+    if device == "mps":
+        try:
+            import torch
+
+            if not torch.backends.mps.is_available():
+                log.warning("MPS not available; falling back to CPU for embeddings")
+                return "cpu"
+        except ImportError:
+            log.warning("torch not available; falling back to CPU for embeddings")
+            return "cpu"
+        return "mps"
+    if device == "cuda":
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                log.warning("CUDA not available; falling back to CPU for embeddings")
+                return "cpu"
+        except ImportError:
+            log.warning("torch not available; falling back to CPU for embeddings")
+            return "cpu"
+        return "cuda"
+    return "cpu"
+
+
+def _get_embedding_model(model_name: str, device: str = "auto") -> Any:
     """Lazy-load and cache a SentenceTransformer model.
 
-    Raises ImportError with install instructions only when called.
+    The cache key is ``(model_name, resolved_device)`` so changing the device
+    triggers a model reload on the new device.  Raises ImportError with install
+    instructions only when called.
     """
-    global _embedding_model, _embedding_model_name
-    if _embedding_model is None or _embedding_model_name != model_name:
+    global _embedding_model, _embedding_model_name, _embedding_model_device
+    resolved = resolve_embedding_device(device)
+    if (
+        _embedding_model is None
+        or _embedding_model_name != model_name
+        or _embedding_model_device != resolved
+    ):
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
@@ -134,16 +200,45 @@ def _get_embedding_model(model_name: str) -> Any:
                 "Thesis analysis requires 'sentence-transformers'; "
                 "install with: pip install sentence-transformers"
             ) from exc
-        _embedding_model = SentenceTransformer(model_name)
+        log.info("Loading embedding model %s on device %s", model_name, resolved)
+        _embedding_model = SentenceTransformer(model_name, device=resolved)
         _embedding_model_name = model_name
+        _embedding_model_device = resolved
     return _embedding_model
 
 
-def compute_embedding(text_norm: str, model_name: str) -> np.ndarray:
+def compute_embedding(text_norm: str, model_name: str, device: str = "auto") -> np.ndarray:
     """Compute a float32 embedding vector for a normalized thesis."""
-    model = _get_embedding_model(model_name)
+    model = _get_embedding_model(model_name, device=device)
     vec = model.encode(text_norm, convert_to_numpy=True)
     return cast(np.ndarray, vec.astype(np.float32))
+
+
+def precompute_embeddings(
+    norms: set[str],
+    model_name: str,
+    device: str = "auto",
+    batch_size: int = 32,
+) -> dict[str, np.ndarray]:
+    """Batch-encode all unique normalized theses in a single encode call.
+
+    Returns a ``{norm: embedding}`` dict.  The texts are sorted for
+    deterministic ordering.  An empty input returns an empty dict without
+    loading the model.
+    """
+    if not norms:
+        return {}
+    sorted_norms = sorted(norms)
+    model = _get_embedding_model(model_name, device=device)
+    vectors = model.encode(
+        sorted_norms,
+        batch_size=batch_size,
+        convert_to_numpy=True,
+    )
+    return {
+        norm: cast(np.ndarray, vec.astype(np.float32))
+        for norm, vec in zip(sorted_norms, vectors, strict=True)
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -232,16 +327,28 @@ class ThesisBank:
     def clusters(self) -> dict[int, Cluster]:
         return self._clusters
 
-    def add_or_update(self, text_norm: str, text_raw: str, true_label: int) -> ThesisEntry:
+    def add_or_update(
+        self,
+        text_norm: str,
+        text_raw: str,
+        true_label: int,
+        precomputed_embedding: np.ndarray | None = None,
+    ) -> ThesisEntry:
         """Add a new thesis or update an existing one by normalized form.
 
         New theses get their embedding computed and are assigned to a cluster.
         Existing theses skip embedding recomputation; their cluster counters
-        are refreshed.
+        are refreshed.  When ``precomputed_embedding`` is provided, it is used
+        directly instead of calling ``compute_embedding``.
         """
         entry = self._theses.get(text_norm)
         if entry is None:
-            embedding = compute_embedding(text_norm, self._config.embedding_model)
+            if precomputed_embedding is not None:
+                embedding = precomputed_embedding
+            else:
+                embedding = compute_embedding(
+                    text_norm, self._config.embedding_model, self._config.embedding_device
+                )
             entry = ThesisEntry(
                 text_raw=text_raw,
                 text_norm=text_norm,
@@ -498,9 +605,24 @@ def analyze(
 
     Returns (bank, name_parts) where name_parts has run_id, prompt_version,
     split, and timestamp parsed from the source artifact filename.
+
+    Embeddings are batch-computed in a single encode call before the
+    clustering loop when the device and batch-size config allow it.
     """
     name_parts = parse_artifact_name(source_artifact)
     ok_rows = filter_ok_records(rows)
+
+    unique_norms: set[str] = set()
+    for row in ok_rows:
+        for norm in row["theses_norm"]:
+            unique_norms.add(norm)
+
+    embedding_lookup = precompute_embeddings(
+        unique_norms,
+        config.embedding_model,
+        device=config.embedding_device,
+        batch_size=config.embedding_batch_size,
+    )
 
     bank = ThesisBank(config)
     for row in ok_rows:
@@ -509,7 +631,12 @@ def analyze(
         theses_raw = row["theses_raw"]
         for i, norm in enumerate(theses_norm):
             raw = theses_raw[i] if i < len(theses_raw) else norm
-            bank.add_or_update(norm, raw, true_label)
+            bank.add_or_update(
+                norm,
+                raw,
+                true_label,
+                precomputed_embedding=embedding_lookup.get(norm),
+            )
 
     return bank, name_parts
 

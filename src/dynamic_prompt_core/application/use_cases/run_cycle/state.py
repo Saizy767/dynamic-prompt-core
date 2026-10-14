@@ -18,7 +18,7 @@ from typing import Any
 from dynamic_prompt_core.application.ports.outbound.run_repository import (
     RunRepository,
 )
-from dynamic_prompt_core.domain.prompts.base import PromptArtifact
+from dynamic_prompt_core.domain.prompts.base import PromptArtifact, parse_prompt_layers
 from dynamic_prompt_core.domain.prompts.fixed import CLASSIFICATION_PROMPT_V0
 
 
@@ -79,10 +79,15 @@ def load_state(path: str) -> CycleState:
     if isinstance(data, list):
         data = data[0]
     version_dict = data.get("active_version", {})
+    _text = version_dict.get("text", CLASSIFICATION_PROMPT_V0.text)
+    try:
+        _layers = parse_prompt_layers(_text)
+    except ValueError:
+        _layers = None
     active_version = PromptArtifact(
         version=version_dict.get("version", "classify-v0"),
-        layers=None,
-        text=version_dict.get("text", CLASSIFICATION_PROMPT_V0.text),
+        layers=_layers,
+        text=_text,
         sha256=version_dict.get("sha256", ""),
     )
     return CycleState(

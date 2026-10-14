@@ -29,7 +29,7 @@ port = 8080
 
 # Inference parameters passed to the backend.
 ctx_size = 4096      # llamacpp: -c (context window); vllm: --max-model-len
-gpu_layers = 0       # llamacpp: -ngl (layers in VRAM; 0 = CPU-only, -1 = all)
+gpu_layers = 8       # llamacpp: -ngl (layers in VRAM; 0 = CPU-only, -1 = all)
 threads = 4          # llamacpp: -t (CPU threads); vllm: ignored
 
 # Seconds to wait for GET /v1/models to return 200 before giving up.
@@ -52,7 +52,7 @@ model_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
 [model.gguf]
 n_ctx = 2048
 n_batch = 512
-n_gpu_layers = 99
+n_gpu_layers = 8
 seed = 42
 verbose = false
 logits_all = true
@@ -129,6 +129,10 @@ manhattan_threshold = 8.0
 # Maximum number of clusters. When reached, unmatched theses are force-assigned
 # to the nearest cluster. 20 is suitable for datasets with <200 examples.
 max_clusters = 20
+# Embedding device: "auto" (detect MPS/CUDA/CPU), "mps", "cuda", or "cpu".
+embedding_device = "auto"
+# Batch size for the batch-encode call when computing all thesis embeddings.
+embedding_batch_size = 32
 # Directory for thesis bank dump artifacts.
 output_dir = "data/results"
 
@@ -169,6 +173,8 @@ allow_reformulation = true
 # Embedding model for the distortion check. Reuses the sentence-transformers
 # model from thesis_analyzer.py by default.
 embedding_model = "paraphrase-multilingual-MiniLM-L12-v2"
+# Embedding device for the distortion check: "auto", "mps", "cuda", or "cpu".
+embedding_device = "auto"
 # Max tokens for the LLM formulation call.
 formulation_max_tokens = 64
 # Temperature for the LLM formulation call (0 = deterministic).
@@ -218,7 +224,7 @@ prompt_store_path = ""
 # "best": load the newest prompt_v*_*_*.json from <output_dir>/prompt/.
 #         If the directory is empty, falls back to v0.
 # "0":   start from the built-in CLASSIFICATION_PROMPT_V0 baseline (default).
-prompt_start = "0"
+prompt_start = "best"
 # Path to the thesis-bank artifact to seed the cycle. When empty, the cycle
 # starts with an empty thesis bank and builds it in the first round.
 thesis_bank_path = ""

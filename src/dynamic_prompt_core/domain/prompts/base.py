@@ -27,6 +27,39 @@ def render(layers: PromptLayer) -> str:
     )
 
 
+_SECTION_HEADERS = ("## Role", "## Task", "## Rules", "## Output contract", "## Fallback")
+
+
+def parse_prompt_layers(text: str) -> PromptLayer:
+    """Reconstruct a ``PromptLayer`` from the text produced by ``render``.
+
+    Splits on the five section headers (``## Role``, ``## Task``, ``## Rules``,
+    ``## Output contract``, ``## Fallback``) and extracts the content between
+    them.  Rules are parsed from the ``- `` bullet format.
+    """
+    import re
+
+    pattern = re.compile(
+        r"^## Role\n(.*?)\n\n## Task\n(.*?)\n\n## Rules\n(.*?)\n\n"
+        r"## Output contract\n(.*?)\n\n## Fallback\n(.*)$",
+        re.DOTALL,
+    )
+    m = pattern.match(text)
+    if not m:
+        raise ValueError("prompt text does not match the expected rendered format")
+    role, task, rules_text, output_contract, fallback = m.groups()
+    rules = [
+        line[2:] for line in rules_text.strip().split("\n") if line.startswith("- ")
+    ]
+    return PromptLayer(
+        role=role,
+        task=task,
+        rules=rules,
+        output_contract=output_contract,
+        fallback=fallback,
+    )
+
+
 @dataclass(frozen=True)
 class PromptArtifact:
     """A versioned, hashed prompt artifact ready to pass to the client."""

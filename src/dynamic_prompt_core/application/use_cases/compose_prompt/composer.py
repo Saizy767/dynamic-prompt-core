@@ -53,6 +53,7 @@ DEFAULT_ALLOW_REFORMULATION = True
 DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_FORMULATION_MAX_TOKENS = 64
 DEFAULT_FORMULATION_TEMPERATURE = 0.0
+DEFAULT_EMBEDDING_DEVICE = "auto"
 DEFAULT_ENDPOINT = "http://127.0.0.1:8080/v1"
 
 REQUIRED_CANDIDATE_FIELDS = (
@@ -72,6 +73,9 @@ class PromptComposerError(ValueError):
     """Raised when an artifact is invalid or composition fails."""
 
 
+_VALID_EMBEDDING_DEVICES = frozenset({"auto", "mps", "cuda", "cpu"})
+
+
 # --------------------------------------------------------------------------- #
 #  Config
 # --------------------------------------------------------------------------- #
@@ -83,6 +87,7 @@ class PromptComposerConfig:
     distortion_threshold: float = DEFAULT_DISTORTION_THRESHOLD
     allow_reformulation: bool = DEFAULT_ALLOW_REFORMULATION
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    embedding_device: str = DEFAULT_EMBEDDING_DEVICE
     formulation_max_tokens: int = DEFAULT_FORMULATION_MAX_TOKENS
     formulation_temperature: float = DEFAULT_FORMULATION_TEMPERATURE
     output_dir: str = DEFAULT_OUTPUT_DIR
@@ -92,6 +97,12 @@ class PromptComposerConfig:
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
         s = config.get("prompt_composer", {})
+        embedding_device = s.get("embedding_device", DEFAULT_EMBEDDING_DEVICE)
+        if embedding_device not in _VALID_EMBEDDING_DEVICES:
+            raise PromptComposerError(
+                f"invalid embedding_device {embedding_device!r}; "
+                f"must be one of {sorted(_VALID_EMBEDDING_DEVICES)}"
+            )
         return cls(
             max_rules=int(s.get("max_rules", DEFAULT_MAX_RULES)),
             max_prompt_tokens=int(s.get("max_prompt_tokens", DEFAULT_MAX_PROMPT_TOKENS)),
@@ -99,6 +110,7 @@ class PromptComposerConfig:
             distortion_threshold=float(s.get("distortion_threshold", DEFAULT_DISTORTION_THRESHOLD)),
             allow_reformulation=bool(s.get("allow_reformulation", DEFAULT_ALLOW_REFORMULATION)),
             embedding_model=s.get("embedding_model", DEFAULT_EMBEDDING_MODEL),
+            embedding_device=embedding_device,
             formulation_max_tokens=int(
                 s.get("formulation_max_tokens", DEFAULT_FORMULATION_MAX_TOKENS)
             ),
@@ -310,12 +322,12 @@ def enforce_rule_length(rule: str, max_words: int) -> tuple[str, bool]:
 # --------------------------------------------------------------------------- #
 #  Semantic distortion check
 # --------------------------------------------------------------------------- #
-def compute_rule_embedding(rule: str, model_name: str) -> np.ndarray:
+def compute_rule_embedding(rule: str, model_name: str, device: str = "auto") -> np.ndarray:
     """Compute a float32 embedding vector for a formulated rule.
 
     Reuses the lazy-loaded sentence-transformers model from thesis_analyzer.py.
     """
-    return compute_embedding(rule, model_name)
+    return compute_embedding(rule, model_name, device=device)
 
 
 def check_distortion(
@@ -323,6 +335,7 @@ def check_distortion(
     centroid: np.ndarray | None,
     config: PromptComposerConfig,
     model_name: str,
+    device: str = "auto",
 ) -> tuple[bool, float | None]:
     """Check a formulated rule for semantic distortion.
 
@@ -339,7 +352,7 @@ def check_distortion(
         )
         return True, None
 
-    rule_embedding = compute_rule_embedding(rule, model_name)
+    rule_embedding = compute_rule_embedding(rule, model_name, device=device)
     similarity = cosine_similarity(rule_embedding, centroid)
     passed = similarity >= config.distortion_threshold
     if not passed:
@@ -499,7 +512,9 @@ async def compose(
         rule, was_truncated = enforce_rule_length(rule, config.max_rule_words)
 
         centroid = centroids.get(cluster_id)
-        passed, similarity = check_distortion(rule, centroid, config, config.embedding_model)
+        passed, similarity = check_distortion(
+            rule, centroid, config, config.embedding_model, config.embedding_device
+        )
 
         if not passed and config.allow_reformulation:
             log.info(
@@ -511,7 +526,7 @@ async def compose(
             if new_rule is not None and new_rule.strip() != "":
                 new_rule, _ = enforce_rule_length(new_rule, config.max_rule_words)
                 passed, similarity = check_distortion(
-                    new_rule, centroid, config, config.embedding_model
+                    new_rule, centroid, config, config.embedding_model, config.embedding_device
                 )
                 if passed:
                     rule = new_rule

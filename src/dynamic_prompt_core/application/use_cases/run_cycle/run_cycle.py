@@ -29,6 +29,7 @@ from dynamic_prompt_core.application.use_cases.run_cycle.state import (
     load_state,
 )
 from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+from dynamic_prompt_core.domain.prompts.base import parse_prompt_layers
 from dynamic_prompt_core.domain.prompts.fixed import CLASSIFICATION_PROMPT_V0
 
 log = logging.getLogger(__name__)
@@ -106,9 +107,13 @@ def _load_best_prompt(
     text = data.get("text", CLASSIFICATION_PROMPT_V0.text)
     version_str = str(data.get("version", "prompt-best"))
     sha = data.get("hash", "")
+    try:
+        layers = parse_prompt_layers(text)
+    except ValueError:
+        layers = None
     artifact = type(CLASSIFICATION_PROMPT_V0)(
         version=version_str,
-        layers=None,
+        layers=layers,
         text=text,
         sha256=sha,
     )
@@ -142,9 +147,13 @@ def load_initial_state(
             version_str = str(active_record.get("version", "classify-v0"))
             text = active_record.get("text", CLASSIFICATION_PROMPT_V0.text)
             sha = active_record.get("hash", "")
+            try:
+                layers = parse_prompt_layers(text)
+            except ValueError:
+                layers = None
             active_version = type(CLASSIFICATION_PROMPT_V0)(
                 version=version_str,
-                layers=None,
+                layers=layers,
                 text=text,
                 sha256=sha,
             )
