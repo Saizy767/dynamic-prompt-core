@@ -691,5 +691,5 @@ class TestPaddingInvariance:
         judgments_batch = await scorer_batch.score("text", [short, long])
         score_batch = judgments_batch[0].score
 
-        assert score_alone == pytest.approx(100.0)
-        assert score_batch == pytest.approx(50.0)
+        assert score_alone == pytest.approx(1.0)
+        assert score_batch == pytest.approx(0.5)

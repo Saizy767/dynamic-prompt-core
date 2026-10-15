@@ -102,9 +102,10 @@ provider API calls. The policy's sole inputs are the judgments produced by a
 the highest-scoring candidate, applying thresholds, handling ties, deciding
 whether no candidate is sufficiently supported, and converting judgments into
 the application's `Classification` representation. The initial implementation
-SHALL select the candidate with the maximum score. Tie behavior for equal
-maximum scores SHALL be explicit and deterministic. The policy SHALL NOT
-calibrate scores, normalize scores, or redefine the score scale.
+SHALL select the candidate with the maximum score. When two or more candidates
+share the maximum score, the first candidate in input order SHALL win. The
+policy SHALL NOT calibrate scores, normalize scores, or redefine the score
+scale.
 
 #### Scenario: Highest scoring candidate selected
 - **WHEN** judgments with scores `A=0.2`, `B=0.8`, `C=0.5` are classified
@@ -114,9 +115,9 @@ calibrate scores, normalize scores, or redefine the score scale.
 - **WHEN** a single judgment is classified
 - **THEN** that candidate is selected
 
-#### Scenario: Tie behavior is deterministic
+#### Scenario: Tie broken by input order
 - **WHEN** two or more candidates share the maximum score
-- **THEN** the policy selects one deterministically according to its documented tie rule
+- **THEN** the first candidate in input order is selected
 
 #### Scenario: Policy does not calibrate or normalize
 - **WHEN** the policy classifies judgments

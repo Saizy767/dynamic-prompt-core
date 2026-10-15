@@ -14,7 +14,7 @@ normalizes by candidate token count, avoiding systematic length bias.
 
 The score is a ranking/evidence signal (raw mean log-probability, typically
 negative).  Conversion to probability is done downstream by the candidate
-scer via softmax over all candidates.
+scorer via softmax over all candidates.
 """
 
 from __future__ import annotations

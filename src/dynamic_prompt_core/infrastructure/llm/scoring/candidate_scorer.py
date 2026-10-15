@@ -37,19 +37,20 @@ from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
 log = logging.getLogger(__name__)
 
 
-def _softmax_percent(scores: list[float]) -> list[float]:
-    """Convert raw log-probability scores to percentages via softmax.
+def _softmax(scores: list[float]) -> list[float]:
+    """Convert raw log-probability scores to probabilities via softmax.
 
-    ``P(i) = e^{z_i} / sum(e^{z_j}) * 100``
+    ``P(i) = e^{z_i} / sum(e^{z_j})``
 
-    Numerically stable: subtracts ``max(z)`` before exponentiation.
+    Returns values in [0, 1] that sum to 1.0.  Numerically stable:
+    subtracts ``max(z)`` before exponentiation.
     """
     if not scores:
         return []
     max_z = max(scores)
     exps = [math.exp(z - max_z) for z in scores]
     total = sum(exps)
-    return [100.0 * e / total for e in exps]
+    return [e / total for e in exps]
 
 
 class LLMLogitCandidateScorer:
@@ -169,7 +170,7 @@ class LLMLogitCandidateScorer:
                     score,
                 )
 
-            probabilities = _softmax_percent(scores)
+            probabilities = _softmax(scores)
 
             t_total = time.perf_counter() - t_total
             if adapter_profile is not None:

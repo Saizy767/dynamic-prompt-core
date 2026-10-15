@@ -142,9 +142,12 @@ class LlamaServerBatchTokenizerAdapter:
     ) -> BatchTokenization:
         """Encode ``(prefix, candidate)`` pairs into a padded batch.
 
-        For each pair, encodes the prefix and candidate separately via
-        ``POST /tokenize``, composes ``prefix_tokens + candidate_tokens``,
-        and records the boundary.  Right-pads all sequences to the same length.
+        For each pair, encodes ``prefix + candidate`` as one string via
+        ``POST /tokenize``, then verifies the prefix token sequence is an
+        exact prefix of the full sequence.  On a cross-boundary merge (BPE
+        merges tokens across the prefix/candidate boundary), raises
+        ``LLMScoringError`` rather than silently scoring a different token
+        sequence.  Right-pads all sequences to the same length.
         """
         if len(prefixes) != len(candidates):
             raise LLMScoringError(
@@ -163,10 +166,21 @@ class LlamaServerBatchTokenizerAdapter:
         async def _encode_pair(
             prefix: str, candidate: str
         ) -> tuple[list[int], int, list[int]]:
-            prefix_tokens = await self._tokenize(prefix)
-            candidate_tokens = await self._tokenize(candidate)
-            full_ids = prefix_tokens + candidate_tokens
-            return full_ids, len(prefix_tokens), candidate_tokens
+            full_ids = await self._tokenize(prefix + candidate)
+            prefix_ids = await self._tokenize(prefix)
+
+            if full_ids[: len(prefix_ids)] == prefix_ids:
+                prefix_count = len(prefix_ids)
+                candidate_ids = full_ids[prefix_count:]
+            else:
+                raise LLMScoringError(
+                    f"tokenization boundary mismatch: the prefix token "
+                    f"sequence is not an exact prefix of the full token "
+                    f"sequence (prompt length {len(prefix + candidate)}); "
+                    f"the server tokenizer merges tokens across the "
+                    f"prefix/candidate boundary"
+                )
+            return full_ids, prefix_count, candidate_ids
 
         try:
             results = await asyncio.gather(

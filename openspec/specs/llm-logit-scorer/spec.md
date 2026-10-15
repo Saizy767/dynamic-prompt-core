@@ -217,18 +217,28 @@ documented in the implementation.
 
 ### Requirement: Logit-to-score algorithm
 The backend SHALL define one deterministic logit-derived score per candidate.
-The score SHALL be the arithmetic mean of the candidate-token log-probabilities
-as defined by the causal logit alignment:
+The score SHALL be computed in two steps:
+
+1. **Per-candidate mean log-probability**: the arithmetic mean of the
+   candidate-token log-probabilities as defined by the causal logit alignment:
 
 ```
-score = mean(candidate_logprob_0, ..., candidate_logprob_{n-1})
+raw_score = mean(candidate_logprob_0, ..., candidate_logprob_{n-1})
 ```
 
 Mean (not sum) normalizes by candidate token count, avoiding systematic length
-bias. The score SHALL be a ranking/evidence signal where higher means stronger
-support. The implementation SHALL NOT claim the score is a probability merely
-because logits were transformed with softmax. The chosen strategy SHALL be
-documented in the implementation.
+bias.
+
+2. **Cross-candidate softmax**: the final score SHALL be the softmax of the
+   raw scores across all candidates, producing a probability in [0, 1]:
+
+```
+score(i) = exp(raw_score_i) / sum(exp(raw_score_j) for j in candidates)
+```
+
+The final score SHALL be a probability in [0, 1].  Scores for all candidates
+in one invocation SHALL sum to 1.0.  Higher means stronger model-backed support.
+The chosen strategy SHALL be documented in the implementation.
 
 #### Scenario: Deterministic score per candidate
 - **WHEN** the same input and candidate are scored twice with the same model
@@ -240,15 +250,15 @@ documented in the implementation.
 
 #### Scenario: Mean not sum
 - **WHEN** a candidate tokenizes into tokens with log-probs `[-0.2, -0.4]`
-- **THEN** the score is `-0.3` (the mean), not `-0.6` (the sum)
+- **THEN** the raw score is `-0.3` (the mean), not `-0.6` (the sum)
+
+#### Scenario: Score is a probability in [0, 1]
+- **WHEN** candidates are scored
+- **THEN** each score is in [0, 1] and all scores sum to 1.0
 
 #### Scenario: Strategy documented
 - **WHEN** the implementation is inspected
 - **THEN** the logit-to-score strategy is explicitly documented
-
-#### Scenario: No unjustified probability claim
-- **WHEN** the score is produced
-- **THEN** it is not labeled a probability unless the scoring procedure establishes that interpretation
 
 ### Requirement: Multi-token candidate handling
 The backend SHALL NOT assume every candidate maps to a single token. If a
@@ -643,21 +653,20 @@ to the sequential implementation. Batching SHALL NOT alter the alignment.
 
 ### Requirement: Batched score algorithm equivalence
 The mean candidate-token log-probability scoring algorithm SHALL remain
-unchanged. For each batch item, the score SHALL be the arithmetic mean of the
-candidate-token log-probabilities. The implementation SHALL NOT convert scores
-into probabilities, normalize scores across candidates, apply softmax across
-candidates, calibrate scores, or introduce temperature scaling. The only change
-from sequential scoring SHALL be that multiple candidates are evaluated
-simultaneously. Batch and sequential implementations SHALL produce equivalent
-candidate-to-score mappings within floating-point tolerance.
+unchanged. For each batch item, the raw score SHALL be the arithmetic mean of
+the candidate-token log-probabilities. The final score SHALL be the softmax
+of the raw scores across all candidates, producing a probability in [0, 1].
+The only change from sequential scoring SHALL be that multiple candidates are
+evaluated simultaneously. Batch and sequential implementations SHALL produce
+equivalent candidate-to-score mappings within floating-point tolerance.
 
 #### Scenario: Mean log-probability per batch item
 - **WHEN** a batch item with candidate-token log-probabilities `l1, ..., ln` is scored
-- **THEN** its score is `(l1 + ... + ln) / n`
+- **THEN** its raw score is `(l1 + ... + ln) / n`
 
-#### Scenario: No cross-candidate normalization
+#### Scenario: Cross-candidate softmax normalization
 - **WHEN** multiple candidates are scored in one batch
-- **THEN** scores are not normalized, softmaxed, or calibrated across candidates
+- **THEN** the final scores are softmax-normalized across candidates, producing probabilities in [0, 1] that sum to 1.0
 
 #### Scenario: Batch equivalent to sequential
 - **WHEN** the same input and candidate set are scored with the batch implementation and the sequential implementation

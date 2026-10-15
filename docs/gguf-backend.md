@@ -85,7 +85,8 @@ GGUF_TEST_MODEL=models/classifier.gguf python -m tests.regression.bench_gguf
 - Single- and multi-token labels are scored using causal log8causal logit alignment: the
   first candidate token is scored from the final prefix position; each
   subsequent token from its preceding position.
-- The score0The score is the mean candidate-token log-probability (not a probability).
+- The score is a probability in [0, 1] derived from softmax over all
+  candidates' mean log-probability scores.
 
 ## Differences between Hugging Face and GGUF scores
 
@@ -96,8 +97,8 @@ investigated as quantization, numerical precision, tokenizerGtokenizer, or promp
 effects.
 
 **Raw logits** are unnormalized vocabulary scores. **Log-probabilities** are
-`log_softmax(logits)`. **Normalized class scores** are the mean
-log-probability over candidate tokens — a ranking signal, not a probability.
+`log_softmax(logits)`. **Candidate scores** are probabilities in [0, 1]
+derived from softmax over all candidates' mean log-probability scores.
 
 ## Troubleshooting
 

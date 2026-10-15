@@ -11,9 +11,10 @@ from dynamic_prompt_core.domain.models.candidate import Candidate
 class Judgment:
     """The result of evaluating one Candidate against a classification input.
 
-    The score is an opaque numeric ranking signal where higher means stronger
-    model-backed support for the candidate. It is not a probability, confidence
-    value, or calibrated likelihood. No [0, 1] constraint is imposed.
+    The score is a probability in [0, 1] derived from softmax over all
+    candidates' mean log-probability scores.  Higher means stronger
+    model-backed support for the candidate.  Scores across all candidates
+    for one input sum to 1.0.
     """
 
     candidate: Candidate

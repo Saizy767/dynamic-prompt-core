@@ -3,19 +3,21 @@
 ``LlamaServerCausalLMAdapter`` implements the ``BatchedCausalLanguageModel`` seam
 by calling the ``llama-server`` OpenAI-compatible API.  Log probabilities for
 all input tokens are retrieved via ``POST /v1/completions`` with ``echo: true``
-and ``logprobs: 0``, which returns ``token_logprobs`` — the log probability of
+and ``logprobs: 1``, which returns ``token_logprobs`` — the log probability of
 each token given its preceding context.
 
 Since ``LogitScorer`` applies ``log_softmax`` to the logits, we reconstruct a
-logit vector per position that yields the correct log probability:
+logit vector per position that yields the correct log probability.  In a causal
+LM, logits at position ``i`` predict the token at position ``i + 1``, so we use
+``token_logprobs[i + 1]`` and ``token_ids[i + 1]``::
 
-    logits[i][actual_token] = log_prob[i]
-    logits[i][other]        = log((1 - exp(log_prob[i])) / (V - 1))
+    logits[i][actual_token] = log_prob[i + 1]
+    logits[i][other]        = log((1 - exp(log_prob[i + 1])) / (V - 1))
 
-This guarantees ``log_softmax(logits[i])[actual_token] == log_prob[i]``.
-
-For servers that support ``--logits-all`` (older builds), the raw ``logits``
-field from ``/completion`` is preferred when present.
+This guarantees ``log_softmax(logits[i])[token_ids[i + 1]] == log_prob[i + 1]``.
+The ``other`` logit is computed per-position from the actual log-prob, NOT
+set to a constant floor: a constant floor makes every token's ``log_softmax``
+≈ 0, collapsing all candidates to equal probability (50/50).
 """
 from __future__ import annotations
 
@@ -47,11 +49,24 @@ def _build_logits_from_logprobs(
 ) -> list[list[float]]:
     """Construct a logit vector per position from token log probabilities.
 
-    For each position ``i``, the logit vector is set so that
-    ``log_softmax(logits[i])[token_ids[i+1]] == token_logprobs[i+1]``.
+    In a causal LM, logits at position ``i`` predict the token at position
+    ``i + 1``.  ``token_logprobs[i + 1]`` is the log-probability of
+    ``token_ids[i + 1]`` given ``token_ids[0 : i + 1]``.  For each position
+    ``i``, the logit vector is set so that::
 
-    ``token_logprobs[0]`` is typically ``None`` (no preceding context); it gets
-    a zero logit vector.
+        log_softmax(logits[i])[token_ids[i + 1]] == token_logprobs[i + 1]
+
+    via::
+
+        logits[i][actual_token] = lp
+        logits[i][other]        = log((1 - exp(lp)) / (V - 1))
+
+    This guarantees the real model log-probability is preserved through the
+    LogitScorer's ``log_softmax`` extraction with causal alignment.
+
+    ``token_logprobs[0]`` is typically ``None`` (no preceding context); the
+    last position has no successor token to predict and gets a floor logit
+    vector.  Neither is used for candidate scoring.
     """
     seq_len = len(token_ids)
     result: list[list[float]] = []
@@ -59,19 +74,32 @@ def _build_logits_from_logprobs(
     for i in range(seq_len):
         logit = [_LOGIT_FLOOR] * vocab_size
 
-        if i < len(token_logprobs):
-            raw_lp = token_logprobs[i]
+        next_idx = i + 1
+        if next_idx < len(token_logprobs) and next_idx < len(token_ids):
+            raw_lp = token_logprobs[next_idx]
             if raw_lp is not None:
                 lp = float(raw_lp)
                 if math.isnan(lp) or math.isinf(lp):
                     raise LLMScoringError(
-                        f"token_logprobs[{i}] is NaN or infinite: {lp}"
+                        f"token_logprobs[{next_idx}] is NaN or infinite: {lp}"
                     )
-                next_token = token_ids[i]
+                next_token = token_ids[next_idx]
                 if next_token >= vocab_size:
                     vocab_size = next_token + 1
                     logit.extend([_LOGIT_FLOOR] * (next_token + 1 - len(logit)))
                 if 0 <= next_token < len(logit):
+                    effective_vocab = len(logit)
+                    if effective_vocab > 1:
+                        prob = math.exp(lp) if lp < 0.0 else 1.0
+                        remaining = 1.0 - prob
+                        if remaining > 0.0:
+                            other_logit = (
+                                math.log(remaining)
+                                - math.log(effective_vocab - 1)
+                            )
+                        else:
+                            other_logit = float("-inf")
+                        logit = [other_logit] * effective_vocab
                     logit[next_token] = lp
 
         result.append(logit)
@@ -114,53 +142,11 @@ def _parse_v1_logprobs(
     return _build_logits_from_logprobs(token_logprobs, token_ids, vocab_size)
 
 
-def _extract_logits_from_completion(
-    body: dict[str, Any],
-    expected_seq_len: int,
-) -> list[list[float]]:
-    """Parse raw ``logits`` from /completion response (for --logits-all servers)."""
-    raw_logits = body.get("logits")
-    if raw_logits is None:
-        return None  # type: ignore[return-value]
-
-    if not isinstance(raw_logits, list):
-        raise LLMScoringError(
-            f"logits field is not a list (got {type(raw_logits).__name__})"
-        )
-
-    if len(raw_logits) == expected_seq_len + 1:
-        raw_logits = raw_logits[:expected_seq_len]
-    elif len(raw_logits) != expected_seq_len:
-        raise LLMScoringError(
-            f"logit sequence length {len(raw_logits)} does not match "
-            f"input token count {expected_seq_len}"
-        )
-
-    result: list[list[float]] = []
-    for i, position in enumerate(raw_logits):
-        if not isinstance(position, (list, tuple)):
-            raise LLMScoringError(
-                f"logit position {i} is not a list "
-                f"(got {type(position).__name__})"
-            )
-        values = [float(x) for x in position]
-        if not values:
-            raise LLMScoringError(f"logit position {i} is empty")
-        for v in values:
-            if math.isnan(v) or math.isinf(v):
-                raise LLMScoringError(
-                    f"logit position {i} contains NaN or infinite values"
-                )
-        result.append(values)
-
-    return result
-
-
 class LlamaServerCausalLMAdapter:
     """Concrete ``BatchedCausalLanguageModel`` backed by llama-server HTTP API.
 
     Uses the OpenAI-compatible ``/v1/completions`` endpoint with ``echo: true``
-    and ``logprobs: 0`` to get ``token_logprobs`` for all input tokens.  The
+    and ``logprobs: 1`` to get ``token_logprobs`` for all input tokens.  The
     log probabilities are converted to logits that produce the correct scores
     when ``LogitScorer`` applies ``log_softmax``.
 
@@ -177,7 +163,6 @@ class LlamaServerCausalLMAdapter:
     ) -> None:
         self._endpoint = endpoint.rstrip("/")
         self._v1_completions_url = f"{self._endpoint}/v1/completions"
-        self._completion_url = f"{self._endpoint}/completion"
         self._timeout = timeout
         self._served_model_name = served_model_name
         self._session: aiohttp.ClientSession | None = None

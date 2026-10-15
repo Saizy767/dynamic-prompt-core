@@ -11,6 +11,7 @@ from dynamic_prompt_core.infrastructure.llm.scoring.llama_server_model_adapter i
     _build_logits_from_logprobs,
     _parse_v1_logprobs,
 )
+from dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer import _log_probability
 
 
 class _MockResponse:
@@ -56,8 +57,32 @@ class TestBuildLogitsFromLogprobs:
         result = _build_logits_from_logprobs(token_logprobs, token_ids, vocab_size=10)
         assert len(result) == 3
         assert len(result[0]) == 10
-        assert result[1][2] == pytest.approx(-0.5)
-        assert result[2][3] == pytest.approx(-1.2)
+        # Position 0 predicts token_ids[1]=2 with logprob token_logprobs[1]=-0.5
+        assert result[0][2] == pytest.approx(-0.5)
+        # Position 1 predicts token_ids[2]=3 with logprob token_logprobs[2]=-1.2
+        assert result[1][3] == pytest.approx(-1.2)
+
+    def test_log_softmax_preserves_real_logprob(self) -> None:
+        """The core invariant: log_softmax(logits[i])[token_ids[i+1]] == token_logprobs[i+1].
+
+        This is the semantic contract that was broken by the _LOGIT_FLOOR
+        constant: with -100.0 for all other tokens, log_softmax collapsed
+        every token's log-prob to ~0.0, producing 50/50 for all candidates.
+        """
+        token_logprobs = [None, -0.7, -0.3]
+        token_ids = [1, 2, 3]
+        result = _build_logits_from_logprobs(token_logprobs, token_ids, vocab_size=10)
+        # Position 0 predicts token 2 with logprob -0.7
+        assert _log_probability(result[0], 2) == pytest.approx(-0.7, abs=1e-9)
+        # Position 1 predicts token 3 with logprob -0.3
+        assert _log_probability(result[1], 3) == pytest.approx(-0.3, abs=1e-9)
+
+    def test_other_tokens_not_floor(self) -> None:
+        """Non-actual tokens must use the correct formula, not _LOGIT_FLOOR."""
+        result = _build_logits_from_logprobs([None, -0.5], [1, 2], vocab_size=10)
+        other_logits = [result[0][i] for i in range(10) if i != 2]
+        assert not all(v == -100.0 for v in other_logits)
+        assert all(v < -0.5 for v in other_logits)
 
     def test_none_logprob_first_position(self) -> None:
         result = _build_logits_from_logprobs([None], [5], vocab_size=10)
@@ -65,7 +90,36 @@ class TestBuildLogitsFromLogprobs:
 
     def test_nan_rejected(self) -> None:
         with pytest.raises(LLMScoringError, match="NaN"):
-            _build_logits_from_logprobs([float("nan")], [0], vocab_size=10)
+            _build_logits_from_logprobs([None, float("nan")], [0, 1], vocab_size=10)
+
+    def test_different_logprobs_produce_different_scores(self) -> None:
+        """End-to-end: different log-probs must yield different softmax probs.
+
+        Regression test for the 50/50 bug: with the _LOGIT_FLOOR constant,
+        all candidates got log_softmax ≈ 0.0, making softmax always 50/50.
+        Uses causal alignment: prefix_count=2, candidate at position 1.
+        """
+        from dynamic_prompt_core.infrastructure.llm.scoring.candidate_scorer import (
+            _softmax,
+        )
+
+        vocab = 100
+        # Candidate A: strong support (lp = -0.2)
+        # Sequence: [prefix_0, prefix_1, cand_a], LogitScorer reads position 1
+        logits_a = _build_logits_from_logprobs(
+            [None, -0.5, -0.2], [0, 1, 10], vocab_size=vocab
+        )
+        score_a = _log_probability(logits_a[1], 10)
+        # Candidate B: weak support (lp = -2.0)
+        logits_b = _build_logits_from_logprobs(
+            [None, -0.5, -2.0], [0, 1, 20], vocab_size=vocab
+        )
+        score_b = _log_probability(logits_b[1], 20)
+
+        probs = _softmax([score_a, score_b])
+        assert probs[0] > 0.5
+        assert probs[1] < 0.5
+        assert probs[0] != pytest.approx(0.5, abs=1e-6)
 
 
 class TestParseV1Logprobs:
@@ -82,7 +136,8 @@ class TestParseV1Logprobs:
         }
         result = _parse_v1_logprobs(body, token_ids=[1, 2, 3])
         assert len(result) == 3
-        assert result[1][2] == pytest.approx(-0.5)
+        # Position 0 predicts token_ids[1]=2 with logprob -0.5
+        assert result[0][2] == pytest.approx(-0.5)
 
     def test_content_format(self) -> None:
         body = {
@@ -100,8 +155,10 @@ class TestParseV1Logprobs:
         }
         result = _parse_v1_logprobs(body, token_ids=[1, 2, 3])
         assert len(result) == 3
-        assert result[1][2] == pytest.approx(-0.5)
-        assert result[2][3] == pytest.approx(-1.2)
+        # Position 0 predicts token_ids[1]=2 with logprob -0.5
+        assert result[0][2] == pytest.approx(-0.5)
+        # Position 1 predicts token_ids[2]=3 with logprob -1.2
+        assert result[1][3] == pytest.approx(-1.2)
 
     def test_missing_choices(self) -> None:
         with pytest.raises(LLMScoringError, match="missing choices"):

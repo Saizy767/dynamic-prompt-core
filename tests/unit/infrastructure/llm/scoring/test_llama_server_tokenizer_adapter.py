@@ -60,12 +60,12 @@ class TestLlamaServerBatchTokenizerAdapter:
         return adapter, mock_session
 
     async def test_encode_batch_single_item(self) -> None:
+        full_tokens = [1, 2, 3, 4, 5]
         prefix_tokens = [1, 2, 3]
-        candidate_tokens = [4, 5]
         adapter, mock = self._make_adapter_with_mock(
             [
+                _MockResponse(200, {"tokens": full_tokens}),
                 _MockResponse(200, {"tokens": prefix_tokens}),
-                _MockResponse(200, {"tokens": candidate_tokens}),
             ]
         )
         result = await adapter.encode_batch(["hello "], ["world"])
@@ -78,10 +78,10 @@ class TestLlamaServerBatchTokenizerAdapter:
     async def test_encode_batch_multiple_items_with_padding(self) -> None:
         adapter, _ = self._make_adapter_with_mock(
             [
+                _MockResponse(200, {"tokens": [1, 2, 3]}),
                 _MockResponse(200, {"tokens": [1, 2]}),
-                _MockResponse(200, {"tokens": [3]}),
+                _MockResponse(200, {"tokens": [4, 5, 6, 7, 8]}),
                 _MockResponse(200, {"tokens": [4, 5, 6]}),
-                _MockResponse(200, {"tokens": [7, 8]}),
             ]
         )
         result = await adapter.encode_batch(
@@ -100,19 +100,19 @@ class TestLlamaServerBatchTokenizerAdapter:
     async def test_candidate_value_sent_verbatim(self) -> None:
         adapter, mock = self._make_adapter_with_mock(
             [
+                _MockResponse(200, {"tokens": [1, 2]}),
                 _MockResponse(200, {"tokens": [1]}),
-                _MockResponse(200, {"tokens": [2]}),
             ]
         )
         await adapter.encode_batch(["prefix "], ["  spaced  "])
-        candidate_call = mock.post_calls[1]["json"]
-        assert candidate_call["content"] == "  spaced  "
+        full_call = mock.post_calls[0]["json"]
+        assert full_call["content"] == "prefix   spaced  "
 
     async def test_add_special_false_in_request(self) -> None:
         adapter, mock = self._make_adapter_with_mock(
             [
+                _MockResponse(200, {"tokens": [1, 2]}),
                 _MockResponse(200, {"tokens": [1]}),
-                _MockResponse(200, {"tokens": [2]}),
             ]
         )
         await adapter.encode_batch(["a"], ["b"])
@@ -124,6 +124,17 @@ class TestLlamaServerBatchTokenizerAdapter:
         result = await adapter.encode_batch([], [])
         assert result.input_ids == []
         assert result.attention_mask == []
+
+    async def test_boundary_mismatch_raises(self) -> None:
+        """BPE merge across prefix/candidate boundary must be rejected."""
+        adapter, _ = self._make_adapter_with_mock(
+            [
+                _MockResponse(200, {"tokens": [1, 2, 3]}),
+                _MockResponse(200, {"tokens": [1, 9]}),
+            ]
+        )
+        with pytest.raises(LLMScoringError, match="boundary mismatch"):
+            await adapter.encode_batch(["pre"], ["fix"])
 
     async def test_unequal_lengths_raises(self) -> None:
         adapter = LlamaServerBatchTokenizerAdapter(endpoint="http://127.0.0.1:8080")
