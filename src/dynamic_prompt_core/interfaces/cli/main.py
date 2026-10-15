@@ -39,7 +39,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     cycle = sub.add_parser("cycle", help="Run the optimization cycle")
     cycle.add_argument("--split", default="dev", help="Dataset split to use")
-    cycle.add_argument("--rounds", type=int, default=3, help="Number of optimization rounds")
+    cycle.add_argument("--cycles", type=int, default=3, help="Number of optimization cycles")
     cycle.add_argument("--resume", default=None, help="Resume from a state dump JSON file")
 
     refine = sub.add_parser("refine", help="Run teacher thesis refinement")
@@ -326,16 +326,16 @@ async def main(argv: list[str] | None = None) -> int:
         return 1
 
     deps = build_cli_deps(cfg, config_path)
-    rounds = getattr(args, "rounds", None) or 3
+    cycles = getattr(args, "cycles", None) or 3
     split = getattr(args, "split", None) or "dev"
     resume_from = getattr(args, "resume", None)
 
     cycle_config = CycleConfig.from_toml(config_path)
-    if rounds != cycle_config.max_rounds:
+    if cycles != cycle_config.max_cycles:
         d = cycle_config.duration
         duration_val = d[0] if isinstance(d, list) and d else d
         cycle_config = type(cycle_config)(
-            **{**cycle_config.__dict__, "max_rounds": rounds, "duration": duration_val}
+            **{**cycle_config.__dict__, "max_cycles": cycles, "duration": duration_val}
         )
 
     try:
@@ -358,7 +358,7 @@ async def main(argv: list[str] | None = None) -> int:
 
     run_input = RunCycleInput(
         config_path=config_path,
-        max_rounds=rounds,
+        max_cycles=cycles,
         dev_split=split,
         resume_from=resume_from,
         config=cycle_config,
@@ -367,8 +367,8 @@ async def main(argv: list[str] | None = None) -> int:
     try:
         result: RunCycleResult = await run_cycle(deps, run_input)
         log.info(
-            "Cycle complete: %d rounds, stop=%s, final=%s",
-            result.total_rounds,
+            "Cycle complete: %d cycles, stop=%s, final=%s",
+            result.total_cycles,
             result.stop_reason,
             result.final_active_version,
         )

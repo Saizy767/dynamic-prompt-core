@@ -761,7 +761,7 @@ def build_final_observation(
     final_version = summary.get("final_active_version", "")
     final_metrics = summary.get("final_dev_metrics", {}) or {}
     stop_reason = summary.get("stop_reason", "")
-    total_rounds = summary.get("total_rounds", 0)
+    total_rounds = summary.get("total_cycles", summary.get("total_rounds", 0))
     accepted_count = len(summary.get("accepted_history", []) or [])
     rollback_count = len(summary.get("rollback_history", []) or [])
 

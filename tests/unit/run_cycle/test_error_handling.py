@@ -13,9 +13,9 @@ from dynamic_prompt_core.application.use_cases.run_cycle.state import CycleState
 
 
 def test_single_example_failure_does_not_stop_cycle():
-    """A single example failure (rollback_counter=0, queue non-empty) continues."""
-    state = CycleState(round_counter=0, rollback_counter=0, candidate_queue=[{"c": 1}], run_id="t")
-    config = CycleConfig(max_rounds=5, max_consecutive_rollbacks=2)
+    """A single example failure (cycle_counter=0, queue non-empty) continues."""
+    state = CycleState(cycle_counter=0, candidate_queue=[{"c": 1}], run_id="t")
+    config = CycleConfig(max_cycles=5)
     should_stop, reason = check_stop(state, config)
     assert should_stop is False
 

@@ -59,11 +59,11 @@ def test_compute_dev_metrics_returns_expected_keys(tmp_path):
     assert "f1" in metrics
 
 
-def test_cycle_state_round_counter_starts_at_zero():
-    """CycleState starts with round_counter=0."""
+def test_cycle_state_cycle_counter_starts_at_zero():
+    """CycleState starts with cycle_counter=0."""
     state = CycleState(run_id="test")
-    assert state.round_counter == 0
-    assert state.rollback_counter == 0
+    assert state.cycle_counter == 0
+    assert state.any_accepted is False
     assert state.candidate_queue == []
 
 
@@ -73,13 +73,13 @@ def test_cycle_state_active_version_defaults_to_v0():
     assert state.active_version.version == CLASSIFICATION_PROMPT_V0.version
 
 
-def test_run_round_executes_steps_and_writes_report(
+def test_run_cycle_step_executes_steps_and_writes_report(
     build_mock_deps,
     cycle_config,
     tmp_output_dir,
 ):
-    """run_round chains all nine steps and writes a report."""
-    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+    """run_cycle_step chains all nine steps and writes a report."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
 
     deps = build_mock_deps()
     state = CycleState(run_id="test-run")
@@ -89,6 +89,8 @@ def test_run_round_executes_steps_and_writes_report(
     mock_runner = AsyncMock()
     mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
     metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
+
+    mock_pc_config = MagicMock(max_rules=10)
 
     with ExitStack() as stack:
         stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
@@ -117,10 +119,13 @@ def test_run_round_executes_steps_and_writes_report(
         stack.enter_context(
             patch(f"{STEPS}.run_holdout", new_callable=AsyncMock, return_value={"accuracy": 0.5})
         )
+        stack.enter_context(
+            patch(f"{STEPS}.PromptComposerConfig.from_config", return_value=mock_pc_config)
+        )
         stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
         stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
 
-        updated = asyncio.run(run_round(state, deps, cycle_config, "config.toml", log_path))
+        updated = asyncio.run(run_cycle_step(state, deps, cycle_config, "config.toml", log_path))
 
     assert updated.latest_report_path == "report.json"
 
@@ -134,7 +139,7 @@ def test_run_active_on_dev_threads_scorer_policy_candidates(build_mock_deps):
 
     deps = build_mock_deps()
     state = CycleState(run_id="test-run")
-    config = CycleConfig(max_rounds=1, run_id="test-run")
+    config = CycleConfig(max_cycles=1, run_id="test-run")
 
     captured: dict = {}
 
@@ -164,7 +169,7 @@ def test_run_new_on_dev_threads_scorer_policy_candidates(build_mock_deps):
     )
 
     deps = build_mock_deps()
-    config = CycleConfig(max_rounds=1, run_id="test-run")
+    config = CycleConfig(max_cycles=1, run_id="test-run")
 
     captured: dict = {}
 
@@ -194,7 +199,7 @@ def test_run_holdout_threads_scorer_policy_candidates(build_mock_deps):
     from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_holdout
 
     deps = build_mock_deps()
-    config = CycleConfig(max_rounds=1, run_id="test-run")
+    config = CycleConfig(max_cycles=1, run_id="test-run")
 
     captured: dict = {}
 
@@ -230,7 +235,7 @@ def test_all_runners_receive_same_scorer_and_policy_instances(build_mock_deps):
 
     deps = build_mock_deps()
     state = CycleState(run_id="test-run")
-    config = CycleConfig(max_rounds=1, run_id="test-run")
+    config = CycleConfig(max_cycles=1, run_id="test-run")
 
     captured_list: list[dict] = []
 
@@ -337,8 +342,8 @@ def test_run_round_accumulates_rules_on_accept(
     cycle_config,
     tmp_output_dir,
 ):
-    """run_round accumulates rules from multiple candidates when both improve metrics."""
-    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+    """run_cycle_step accumulates rules from multiple candidates when both improve metrics."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
 
     deps = build_mock_deps()
     state = CycleState(run_id="test-run")
@@ -398,10 +403,10 @@ def test_run_round_accumulates_rules_on_accept(
         stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
         stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
 
-        updated = asyncio.run(run_round(state, deps, cycle_config, "config.toml", log_path))
+        updated = asyncio.run(run_cycle_step(state, deps, cycle_config, "config.toml", log_path))
 
-    assert updated.active_version.version == "classify-v2"
-    assert updated.rollback_counter == 0
+    assert updated.active_version.version == "v1"
+    assert updated.any_accepted is True
 
 
 def test_run_round_stops_on_degradation(
@@ -409,8 +414,8 @@ def test_run_round_stops_on_degradation(
     cycle_config,
     tmp_output_dir,
 ):
-    """run_round keeps the first accepted rule when the second candidate degrades."""
-    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+    """run_cycle_step keeps the first accepted rule when the second candidate degrades."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
 
     deps = build_mock_deps()
     state = CycleState(run_id="test-run")
@@ -473,10 +478,10 @@ def test_run_round_stops_on_degradation(
         stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
         stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
 
-        updated = asyncio.run(run_round(state, deps, cycle_config, "config.toml", log_path))
+        updated = asyncio.run(run_cycle_step(state, deps, cycle_config, "config.toml", log_path))
 
-    assert updated.active_version.version == "classify-v1"
-    assert updated.rollback_counter == 0
+    assert updated.active_version.version == "v1"
+    assert updated.any_accepted is True
 
 
 def test_run_round_no_acceptance_increments_rollback(
@@ -484,8 +489,8 @@ def test_run_round_no_acceptance_increments_rollback(
     cycle_config,
     tmp_output_dir,
 ):
-    """run_round increments rollback counter when no candidate is accepted."""
-    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+    """run_cycle_step keeps active version when no candidate is accepted."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
 
     deps = build_mock_deps()
     state = CycleState(run_id="test-run")
@@ -539,9 +544,9 @@ def test_run_round_no_acceptance_increments_rollback(
         stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
         stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
 
-        updated = asyncio.run(run_round(state, deps, cycle_config, "config.toml", log_path))
+        updated = asyncio.run(run_cycle_step(state, deps, cycle_config, "config.toml", log_path))
 
-    assert updated.rollback_counter == 1
+    assert updated.any_accepted is False
     assert updated.active_version.version == CLASSIFICATION_PROMPT_V0.version
 
 

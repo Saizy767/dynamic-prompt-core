@@ -564,7 +564,7 @@ def _build_target_cycle_config(
     import dynamic_prompt_core.application.use_cases.run_cycle.orchestrator as cycle_orchestrator  # noqa: E402
 
     return cycle_orchestrator.CycleOrchestratorConfig(
-        max_rounds=config.max_rounds_target,
+        max_cycles=config.max_rounds_target,
         prompt_store_path=target_store_path,
         thesis_bank_path=target_thesis_bank_path,
         output_dir=config.target_artifacts_path,
@@ -601,7 +601,7 @@ async def _run_target_cycle(
         log_fn(
             "run_target_cycle",
             config.target_task.task_id,
-            {"run_id": run_id, "max_rounds": config.max_rounds_target},
+            {"run_id": run_id, "max_cycles": config.max_rounds_target},
         )
 
     state = await cycle_orchestrator.run_cycle(target_config, endpoint=endpoint, run_id=run_id)
@@ -699,7 +699,7 @@ async def _compute_target_baseline(
     import dynamic_prompt_core.application.use_cases.run_cycle.orchestrator as cycle_orchestrator  # noqa: E402
 
     baseline_config = cycle_orchestrator.CycleOrchestratorConfig(
-        max_rounds=1,
+        max_cycles=1,
         prompt_store_path="",
         thesis_bank_path="",
         output_dir=config.target_artifacts_path,
@@ -746,7 +746,7 @@ def write_effectiveness_report(
         "baseline": baseline_metrics,
         "after_first_round": transfer_result.target_metrics_start,
         "after_final_round": transfer_result.target_metrics_final,
-        "rounds_to_stop": target_state.round_counter,
+        "rounds_to_stop": target_state.cycle_counter,
         "improvement": transfer_result.improvement,
         "timestamp": timestamp,
         "created_at": datetime.now(UTC).isoformat(),
@@ -778,7 +778,7 @@ async def _run_cold_start_cycle(
     run_id = f"coldstart-{config.target_task.task_id}-{timestamp}"
 
     cold_config = cycle_orchestrator.CycleOrchestratorConfig(
-        max_rounds=config.max_rounds_target,
+        max_cycles=config.max_rounds_target,
         prompt_store_path="",
         thesis_bank_path="",
         output_dir=config.target_artifacts_path,
@@ -789,7 +789,7 @@ async def _run_cold_start_cycle(
         log_fn(
             "cold_start_run",
             config.target_task.task_id,
-            {"run_id": run_id, "max_rounds": config.max_rounds_target},
+            {"run_id": run_id, "max_cycles": config.max_rounds_target},
         )
 
     state = await cycle_orchestrator.run_cycle(cold_config, endpoint=endpoint, run_id=run_id)
@@ -806,10 +806,10 @@ def _write_comparison_section(
     transfer_result: TransferResult,
 ) -> dict[str, Any]:
     """Build the cold-start comparison section for the report (design D11)."""
-    acceleration = cold_start_state.round_counter - transfer_state.round_counter
+    acceleration = cold_start_state.cycle_counter - transfer_state.cycle_counter
     return {
         "metrics_final": cold_start_metrics,
-        "rounds_to_stop": cold_start_state.round_counter,
+        "rounds_to_stop": cold_start_state.cycle_counter,
         "stop_reason": getattr(cold_start_state, "_stop_reason", ""),
         "acceleration_rounds": acceleration,
     }

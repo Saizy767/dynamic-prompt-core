@@ -29,11 +29,13 @@ from dynamic_prompt_core.application.use_cases.analyze_theses.thesis_analyzer im
 from dynamic_prompt_core.application.use_cases.compare_versions.comparator import (
     VersionComparatorConfig,
     decide,
-    update_rollback_count,
 )
 from dynamic_prompt_core.application.use_cases.compose_prompt.composer import (
     PromptComposerConfig,
+    assemble_prompt,
     compose,
+    finalized_version,
+    intermediate_version,
     load_base_layers,
     load_centroids,
     write_prompt_version,
@@ -67,6 +69,16 @@ from dynamic_prompt_core.domain.prompts.base import PromptArtifact
 log = logging.getLogger(__name__)
 
 
+def _extract_metric_summary(metrics: dict[str, Any]) -> dict[str, float]:
+    """Extract ``accuracy``, ``macro_f1``, ``minority_f1`` from a metrics dict."""
+    f1 = metrics.get("f1", {})
+    return {
+        "accuracy": float(metrics.get("accuracy", 0.0)),
+        "macro_f1": float(f1.get("macro", 0.0)),
+        "minority_f1": float(f1.get("minority", 0.0)),
+    }
+
+
 # --------------------------------------------------------------------------- #
 #  Step 1: Run the active prompt on dev
 # --------------------------------------------------------------------------- #
@@ -81,7 +93,7 @@ async def run_active_on_dev(
     Returns the results artifact path.
     """
     runner_config = RunnerConfig.from_config(config_path)
-    round_number = state.round_counter + 1
+    cycle_number = state.cycle_counter + 1
     runner = BaselineRunner(
         task=cast(Any, deps.llm_client),
         config=runner_config,
@@ -91,7 +103,7 @@ async def run_active_on_dev(
         candidates=list(deps.candidates),
         run_id=state.run_id,
         classify_prompt=state.active_version,
-        duration=config.duration_for_round(round_number),
+        duration=config.duration_for_cycle(cycle_number),
     )
     _, artifact_path = await runner.run()
     return artifact_path
@@ -168,6 +180,7 @@ async def compose_new_version(
     config_path: str,
     deps: RunCycleDeps,
     run_id: str,
+    version_str: str | None = None,
 ) -> tuple[PromptArtifact, str, list[int]]:
     """Compose a new prompt version from a candidate and the active base layers.
 
@@ -186,6 +199,7 @@ async def compose_new_version(
         cast(Any, deps.llm_client),
         active_prompt.version,
         existing_rules=existing_rules,
+        version_str=version_str,
     )
     source_candidates = [c["cluster_id"] for c in rules_with_lineage]
     artifact_path = write_prompt_version(
@@ -227,7 +241,7 @@ async def run_new_on_dev(
         candidates=list(deps.candidates),
         run_id=run_id,
         classify_prompt=new_prompt,
-        duration=config.duration_for_round(round_number),
+        duration=config.duration_for_cycle(round_number),
     )
     _, artifact_path = await runner.run()
     return artifact_path
@@ -260,15 +274,14 @@ def decide_and_update(
         state.accepted_history.append(state.active_version.version)
         state.active_version = new_prompt
         state.active_version_path = new_artifact_path
-        state.rollback_counter = update_rollback_count(state.rollback_counter, decision)
+        state.any_accepted = True
         accepted_cluster_ids = {str(cid) for cid in source_candidates}
         if state.thesis_bank_path:
             update_in_prompt_flags(state.thesis_bank_path, accepted_cluster_ids)
     else:
-        state.rollback_counter = update_rollback_count(state.rollback_counter, decision)
         state.rollback_history.append(
             {
-                "round": state.round_counter + 1,
+                "cycle": state.cycle_counter + 1,
                 "version": new_prompt.version,
                 "reason": reason,
             }
@@ -302,7 +315,7 @@ async def run_holdout(
         candidates=list(deps.candidates),
         run_id=run_id,
         classify_prompt=prompt_artifact,
-        duration=config.duration_for_round(round_number),
+        duration=config.duration_for_cycle(round_number),
         skip_extraction=True,
     )
     _, artifact_path = await runner.run()
@@ -352,30 +365,34 @@ async def refine_theses_step(
 
 
 # --------------------------------------------------------------------------- #
-#  Step 9: Run a full round (steps 1–9)
+#  Step 9: Run a full cycle (steps 1–8)
 # --------------------------------------------------------------------------- #
-async def run_round(
+async def run_cycle_step(
     state: CycleState,
     deps: RunCycleDeps,
     config: CycleConfig,
     config_path: str,
     log_path: str,
 ) -> CycleState:
-    """Execute one full round (steps 1–9) and return the updated state.
+    """Execute one full cycle and return the updated state.
 
     Greedily accumulates rules from the candidate queue: each candidate's
-    rule is composed on top of the previously accepted rules, run on dev,
-    and compared against the current best. Accumulation continues on
-    accept and stops on degradation or when max_rules is reached.
+    rule is composed on top of the previously accepted rules, run on
+    holdout, and compared against the current best. Accumulation continues
+    on accept (strict improvement) and stops on degradation or when
+    max_rules is reached. The best version is finalized as ``vN``.
     """
-    round_number = state.round_counter + 1
+    cycle_number = state.cycle_counter + 1
+    state.cycle_number = cycle_number
+    state.cluster_index = 0
+    state.any_accepted = False
     active_version_at_start = state.active_version.version
-    log_event("round_start", round_number, {"active_version": active_version_at_start}, log_path)
+    log_event("cycle_start", cycle_number, {"active_version": active_version_at_start}, log_path)
 
-    # Step 1: Run active on dev
+    # Step 1: Run active on dev (thesis collection + dev metrics for logging)
     active_dev_path = await run_active_on_dev(state, deps, config, config_path)
 
-    # Step 2: Compute dev metrics for active
+    # Step 2: Compute dev metrics for active (logging only)
     metrics_dev_active = compute_dev_metrics(active_dev_path, config_path)
 
     # Optional teacher refinement (between step 1 and step 3)
@@ -401,20 +418,31 @@ async def run_round(
     # Step 4: Select candidates
     _, candidate_queue = select_candidates(thesis_bank_path, config_path)
     state.candidate_queue = list(candidate_queue)
-    state.last_round_new_candidates = len(candidate_queue)
+    state.last_cycle_new_candidates = len(candidate_queue)
 
-    # Steps 5–7: Greedy incremental rule accumulation
-    original_active = state.active_version
+    # Step 5: Run active on holdout → cached baseline for the accumulation loop
+    metrics_holdout_active: dict[str, Any] = {}
+    try:
+        metrics_holdout_active = await run_holdout(
+            state.active_version,
+            config,
+            config_path,
+            deps,
+            state.run_id,
+            round_number=cycle_number,
+        )
+    except Exception as exc:
+        log.warning("active holdout evaluation failed: %s", exc)
+
+    # Steps 6–7: Greedy incremental rule accumulation (holdout only)
     best_prompt = state.active_version
     best_artifact_path = state.active_version_path
-    best_metrics = metrics_dev_active
+    best_holdout_metrics = metrics_holdout_active
     accumulated_source_candidates: list[int] = []
-    any_accepted = False
     decision = "rollback"
     reason = ""
     new_version = ""
-    changed: list[dict[str, Any]] = []
-    metrics_dev_new: dict[str, Any] = {}
+    attempts: list[dict[str, Any]] = []
 
     pc_config = PromptComposerConfig.from_config(config_path)
 
@@ -428,35 +456,51 @@ async def run_round(
             break
 
         candidate = state.candidate_queue.pop(0)
+        state.cluster_index += 1
 
-        # Step 5: Compose new version (carries over existing rules from best_prompt)
+        # Step 6: Compose vN_k (carries over existing rules from best_prompt)
+        version_str = intermediate_version(cycle_number, state.cluster_index)
         new_prompt, new_artifact_path, source_candidates = await compose_new_version(
             candidate,
             best_prompt,
             config_path,
             deps,
             state.run_id,
+            version_str=version_str,
         )
         new_version = new_prompt.version
 
-        # Step 6: Run new on dev
-        new_dev_path = await run_new_on_dev(
-            new_prompt,
-            config,
-            config_path,
-            deps,
-            state.run_id,
-            round_number=round_number,
-        )
-        metrics_dev_new = compute_dev_metrics(new_dev_path, config_path)
+        # Run vN_k on holdout only (no dev run per candidate)
+        holdout_metrics_new: dict[str, Any] = {}
+        try:
+            holdout_metrics_new = await run_holdout(
+                new_prompt,
+                config,
+                config_path,
+                deps,
+                state.run_id,
+                round_number=cycle_number,
+            )
+        except Exception as exc:
+            log.warning("holdout evaluation failed for %s: %s", new_version, exc)
+            break
 
-        # Step 7: Decide (compare new vs current best)
+        # Step 7: Decide by holdout (strict improvement)
         vc_config = VersionComparatorConfig.from_config(config_path)
-        decision, reason = decide(metrics_dev_new, best_metrics, vc_config)
+        decision, reason = decide(holdout_metrics_new, best_holdout_metrics, vc_config)
+
+        attempts.append(
+            {
+                "version": new_version,
+                "cluster_id": candidate.get("cluster_id"),
+                "holdout_metric": _extract_metric_summary(holdout_metrics_new),
+                "decision": decision,
+            }
+        )
 
         log_event(
             "decision",
-            round_number,
+            cycle_number,
             {
                 "decision": decision,
                 "reason": reason,
@@ -468,14 +512,14 @@ async def run_round(
         )
 
         if decision == "accept":
-            any_accepted = True
+            state.any_accepted = True
             best_prompt = new_prompt
             best_artifact_path = new_artifact_path
-            best_metrics = metrics_dev_new
+            best_holdout_metrics = holdout_metrics_new
             accumulated_source_candidates.extend(source_candidates)
             log_event(
                 "accept",
-                round_number,
+                cycle_number,
                 {
                     "version": new_version,
                     "cluster_id": candidate.get("cluster_id"),
@@ -487,27 +531,34 @@ async def run_round(
 
         log_event(
             "rollback",
-            round_number,
+            cycle_number,
             {"version": new_version, "cluster_id": candidate.get("cluster_id")},
             log_path,
         )
         break
 
+    # Finalize: rename best version to vN
+    if state.any_accepted:
+        finalized_str = finalized_version(cycle_number)
+        base_layers = load_base_layers(best_prompt)
+        all_rules = list(best_prompt.layers.rules) if best_prompt.layers else []
+        best_prompt = assemble_prompt(
+            base_layers, all_rules, active_version_at_start, version_str=finalized_str
+        )
+
     # Update state with the best version
     state.active_version = best_prompt
     state.active_version_path = best_artifact_path
 
-    # Update rollback counter and histories
-    if any_accepted:
-        state.rollback_counter = 0
+    # Update histories
+    if state.any_accepted:
         state.accepted_history.append(active_version_at_start)
     else:
-        state.rollback_counter += 1
         state.rollback_history.append(
             {
-                "round": round_number,
-                "version": new_version,
-                "reason": reason,
+                "cycle": cycle_number,
+                "version": new_version or active_version_at_start,
+                "reason": reason or "no candidates available",
             }
         )
 
@@ -516,44 +567,20 @@ async def run_round(
         accepted_cluster_ids = {str(cid) for cid in accumulated_source_candidates}
         update_in_prompt_flags(state.thesis_bank_path, accepted_cluster_ids)
 
-    # Holdout evaluation for both versions (logged only)
-    metrics_holdout_active: dict[str, Any] = {}
-    metrics_holdout_new: dict[str, Any] = {}
-    try:
-        metrics_holdout_active = await run_holdout(
-            original_active,
-            config,
-            config_path,
-            deps,
-            state.run_id,
-            round_number=round_number,
-        )
-        if new_version and best_prompt.version != original_active.version:
-            metrics_holdout_new = await run_holdout(
-                best_prompt,
-                config,
-                config_path,
-                deps,
-                state.run_id,
-                round_number=round_number,
-            )
-    except Exception as exc:
-        log.warning("holdout evaluation failed: %s", exc)
-
-    # Step 9: Write per-round report
-    final_decision = "accept" if any_accepted else "rollback"
-    next_action = "continue" if any_accepted else "rollback"
+    # Step 8: Write per-cycle report
+    final_decision = "accept" if state.any_accepted else "rollback"
+    next_action = "continue" if state.any_accepted else "rollback"
     report_path = write_report(
-        round_number=round_number,
+        round_number=cycle_number,
         active_version_at_start=active_version_at_start,
         new_version=best_prompt.version,
         decision=final_decision,
         metrics_dev_active=metrics_dev_active,
-        metrics_dev_new=best_metrics,
+        metrics_dev_new={},
         metrics_holdout_active=metrics_holdout_active,
-        metrics_holdout_new=metrics_holdout_new,
-        rollback_counter=state.rollback_counter,
-        changed_decisions=changed,
+        metrics_holdout_new=best_holdout_metrics,
+        rollback_counter=0,
+        changed_decisions=[],
         next_action=next_action,
         run_id=state.run_id,
         run_repository=deps.run_repository,
@@ -562,8 +589,8 @@ async def run_round(
     state.latest_report_path = report_path
 
     log_event(
-        "round_end",
-        round_number,
+        "cycle_end",
+        cycle_number,
         {"decision": final_decision, "report": report_path},
         log_path,
     )

@@ -32,7 +32,6 @@ log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = "config.toml"
 DEFAULT_OUTPUT_DIR = "data/results"
-DEFAULT_MAX_CONSECUTIVE_ROLLBACKS = 2
 DEFAULT_DECISION_METRIC = "macro_f1"
 DEFAULT_TIE_BREAKER_METRIC = "minority_f1"
 DEFAULT_ENDPOINT = "http://127.0.0.1:8080/v1"
@@ -56,7 +55,7 @@ class VersionComparatorError(ValueError):
 # --------------------------------------------------------------------------- #
 @dataclass
 class VersionComparatorConfig:
-    max_consecutive_rollbacks: int = DEFAULT_MAX_CONSECUTIVE_ROLLBACKS
+    max_consecutive_rollbacks: int = 2
     decision_metric: str = DEFAULT_DECISION_METRIC
     tie_breaker_metric: str = DEFAULT_TIE_BREAKER_METRIC
     output_dir: str = DEFAULT_OUTPUT_DIR
@@ -68,7 +67,7 @@ class VersionComparatorConfig:
         s = config.get("version_comparator", {})
         return cls(
             max_consecutive_rollbacks=int(
-                s.get("max_consecutive_rollbacks", DEFAULT_MAX_CONSECUTIVE_ROLLBACKS)
+                s.get("max_consecutive_rollbacks", 2)
             ),
             decision_metric=s.get("decision_metric", DEFAULT_DECISION_METRIC),
             tie_breaker_metric=s.get("tie_breaker_metric", DEFAULT_TIE_BREAKER_METRIC),
@@ -269,9 +268,9 @@ def decide(
 ) -> tuple[str, str]:
     """Decide whether to accept or roll back the new version.
 
-    Accept when the new version's decision_metric is >= the active's.
-    When equal, accept only if the tie_breaker_metric is strictly higher.
-    Otherwise roll back.
+    Accept only when the new version's decision_metric is strictly greater
+    than the active's. Equal or lower metrics roll back. The tie_breaker_metric
+    is logged for visibility but does not influence the decision.
 
     Returns (decision, reason) where decision is "accept" or "rollback".
     """
@@ -284,19 +283,14 @@ def decide(
     if new_primary > active_primary:
         return "accept", f"{primary} improved ({active_primary:.4f} -> {new_primary:.4f})"
 
+    new_tie = _extract_metric(metrics_new, tie)
+    active_tie = _extract_metric(metrics_active, tie)
+
     if new_primary == active_primary:
-        new_tie = _extract_metric(metrics_new, tie)
-        active_tie = _extract_metric(metrics_active, tie)
-        if new_tie > active_tie:
-            return (
-                "accept",
-                f"{primary} tied ({new_primary:.4f}), {tie} improved "
-                f"({active_tie:.4f} -> {new_tie:.4f})",
-            )
         return (
-            "accept",
-            f"{primary} tied ({new_primary:.4f}), {tie} did not improve "
-            f"({active_tie:.4f} -> {new_tie:.4f})",
+            "rollback",
+            f"{primary} tied ({new_primary:.4f}), {tie} "
+            f"({active_tie:.4f} -> {new_tie:.4f}); strict improvement required",
         )
 
     return (
@@ -322,29 +316,8 @@ def changed_decisions(
 
 
 # --------------------------------------------------------------------------- #
-#  Rollback counter and candidate queue
+#  Candidate queue
 # --------------------------------------------------------------------------- #
-def update_rollback_count(current_count: int, decision: str) -> int:
-    """Return the updated rollback count.
-
-    Reset to 0 on accept, increment by 1 on rollback.
-    """
-    if decision == "accept":
-        return 0
-    return current_count + 1
-
-
-def check_stop(rollback_count: int, config: VersionComparatorConfig) -> tuple[bool, str | None]:
-    """Check whether the cycle should stop.
-
-    Returns (should_stop, reason). Stops when rollback_count reaches
-    max_consecutive_rollbacks.
-    """
-    if rollback_count >= config.max_consecutive_rollbacks:
-        return True, "max_consecutive_rollbacks reached"
-    return False, None
-
-
 def next_candidate(
     candidate_queue: list[str],
 ) -> tuple[str | None, str | None]:
@@ -507,12 +480,6 @@ def main() -> None:
         help="Candidate artifact paths for rollback (consumed left-to-right)",
     )
     parser.add_argument(
-        "--rollback-count",
-        type=int,
-        default=0,
-        help="Current consecutive rollback count (from prior decision artifact)",
-    )
-    parser.add_argument(
         "--dataset-artifact",
         default=None,
         help="Path to prepared dataset artifact (jsonl/parquet)",
@@ -564,7 +531,6 @@ def main() -> None:
     )
 
     decision, reason = decide(metrics_new, metrics_active, config)
-    rollback_count = update_rollback_count(args.rollback_count, decision)
 
     log_decision(
         decision,
@@ -573,7 +539,7 @@ def main() -> None:
         metrics_new,
         metrics_active,
         deltas,
-        rollback_count,
+        0,
     )
 
     artifact_path = write_decision(
@@ -585,7 +551,7 @@ def main() -> None:
         deltas["accuracy"],
         deltas["macro_f1"],
         deltas["minority_f1"],
-        rollback_count,
+        0,
         reason,
         changed,
         run_id,
@@ -600,16 +566,13 @@ def main() -> None:
         new_prompt.version,
         active_prompt.version,
         deltas,
-        rollback_count,
+        0,
         reason,
         len(changed),
     )
     print(f"Decision artifact: {artifact_path}")
 
-    should_stop, stop_reason = check_stop(rollback_count, config)
-    if should_stop:
-        print(f"\nCycle stopped: {stop_reason}")
-    elif decision == "rollback":
+    if decision == "rollback":
         candidate_queue = list(args.candidate_queue)
         next_path, queue_reason = next_candidate(candidate_queue)
         if next_path is not None:

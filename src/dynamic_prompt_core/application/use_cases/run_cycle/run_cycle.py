@@ -28,7 +28,7 @@ from dynamic_prompt_core.application.use_cases.run_cycle.state import (
     dump_state,
     load_state,
 )
-from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_round
+from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
 from dynamic_prompt_core.domain.prompts.base import parse_prompt_layers
 from dynamic_prompt_core.domain.prompts.fixed import CLASSIFICATION_PROMPT_V0
 
@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 class RunCycleResult:
     """Result of a run_cycle execution."""
 
-    total_rounds: int
+    total_cycles: int
     stop_reason: str
     final_active_version: str
     accepted_history: list[str]
@@ -51,12 +51,10 @@ def check_stop(state: CycleState, config: CycleConfig) -> tuple[bool, str | None
 
     Returns ``(should_stop, reason)``.
     """
-    if state.round_counter >= config.max_rounds:
-        return True, "max_rounds_reached"
-    if state.rollback_counter >= config.max_consecutive_rollbacks:
-        return True, "max_rollbacks_reached"
-    if not state.candidate_queue and state.rollback_counter > 0:
-        return True, "candidate_queue_exhausted"
+    if state.cycle_counter >= config.max_cycles:
+        return True, "max_cycles_reached"
+    if not state.any_accepted and state.cycle_counter > 0:
+        return True, "no_improvement"
     return False, None
 
 
@@ -185,7 +183,7 @@ def load_initial_state(
         )
 
     return CycleState(
-        round_counter=0,
+        cycle_counter=0,
         active_version=active_version,
         active_version_path=active_version_path,
         run_id=run_id,
@@ -199,8 +197,8 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
     It does not instantiate infrastructure classes directly.
     """
     config = run_input.config or CycleConfig.from_toml(run_input.config_path)
-    if run_input.max_rounds != config.max_rounds:
-        config = type(config)(**{**config.__dict__, "max_rounds": run_input.max_rounds})
+    if run_input.max_cycles != config.max_cycles:
+        config = type(config)(**{**config.__dict__, "max_cycles": run_input.max_cycles})
 
     output_dir = config.output_dir
     os.makedirs(output_dir, exist_ok=True)
@@ -217,14 +215,14 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
     try:
         if run_input.resume_from:
             state = load_state(run_input.resume_from)
-            log.info("resuming from round %d", state.round_counter)
+            log.info("resuming from cycle %d", state.cycle_counter)
         else:
             state = load_initial_state(deps, config, run_input.config_path)
 
         log_event(
             "cycle_start",
             0,
-            {"run_id": state.run_id, "max_rounds": config.max_rounds},
+            {"run_id": state.run_id, "max_cycles": config.max_cycles},
             log_path,
         )
 
@@ -238,10 +236,10 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
                 stop_reason = reason or "max_rounds_reached"
                 break
 
-            state = await run_round(state, deps, config, run_input.config_path, log_path)
-            state.round_counter += 1
+            state = await run_cycle_step(state, deps, config, run_input.config_path, log_path)
+            state.cycle_counter += 1
 
-            if config.dump_state_after_each_round:
+            if config.dump_state_after_each_cycle:
                 dump_state(state, deps.run_repository, output_dir)
 
             if state.latest_report_path:
@@ -270,11 +268,11 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
 
                 stop_config = config.stop_criteria_config
                 ctx = StopEvaluationContext(
-                    round_counter=state.round_counter,
-                    rollback_counter=state.rollback_counter,
-                    max_consecutive_rollbacks=config.max_consecutive_rollbacks,
+                    round_counter=state.cycle_counter,
+                    rollback_counter=0,
+                    max_consecutive_rollbacks=0,
                     candidate_queue_size=len(state.candidate_queue),
-                    new_candidates_found=state.last_round_new_candidates,
+                    new_candidates_found=state.last_cycle_new_candidates,
                     metric_history=list(metric_history),
                     decision_history=list(decision_history),
                     rule_set_history=list(rule_set_history),
@@ -319,10 +317,10 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
             output_dir,
         )
 
-        log_event("stop", state.round_counter, {"reason": stop_reason}, log_path)
+        log_event("stop", state.cycle_counter, {"reason": stop_reason}, log_path)
 
         return RunCycleResult(
-            total_rounds=state.round_counter,
+            total_cycles=state.cycle_counter,
             stop_reason=stop_reason,
             final_active_version=state.active_version.version,
             accepted_history=state.accepted_history,

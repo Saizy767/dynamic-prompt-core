@@ -85,21 +85,21 @@ def test_extract_rule_set_no_layers():
     assert rule_set == frozenset()
 
 
-def test_check_stop_max_rounds():
-    state = CycleState(round_counter=5)
+def test_check_stop_max_cycles():
+    state = CycleState(cycle_counter=5)
     from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 
-    config = CycleConfig(max_rounds=5)
+    config = CycleConfig(max_cycles=5)
     should_stop, reason = check_stop(state, config)
     assert should_stop is True
-    assert reason == "max_rounds_reached"
+    assert reason == "max_cycles_reached"
 
 
 def test_check_stop_continue():
-    state = CycleState(round_counter=2, candidate_queue=[{"id": 1}])
+    state = CycleState(cycle_counter=2, candidate_queue=[{"id": 1}], any_accepted=True)
     from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 
-    config = CycleConfig(max_rounds=5, max_consecutive_rollbacks=3)
+    config = CycleConfig(max_cycles=5)
     should_stop, reason = check_stop(state, config)
     assert should_stop is False
     assert reason is None
@@ -173,9 +173,6 @@ def test_valid_stop_reasons_extended():
     )
 
     assert "plateau_detected" in VALID_STOP_REASONS
-    assert "metric_degradation" in VALID_STOP_REASONS
-    assert "no_candidates_available" in VALID_STOP_REASONS
-    assert "budget_exhausted" in VALID_STOP_REASONS
-    assert "rule_stagnation" in VALID_STOP_REASONS
-    assert "rollback_streak" in VALID_STOP_REASONS
-    assert "max_rounds_reached" in VALID_STOP_REASONS
+    assert "max_cycles_reached" in VALID_STOP_REASONS
+    assert "no_improvement" in VALID_STOP_REASONS
+    assert "unrecoverable_error" in VALID_STOP_REASONS

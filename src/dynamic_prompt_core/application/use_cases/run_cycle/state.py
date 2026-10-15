@@ -24,20 +24,22 @@ from dynamic_prompt_core.domain.prompts.fixed import CLASSIFICATION_PROMPT_V0
 
 @dataclass
 class CycleState:
-    """Mutable cycle state threaded across rounds."""
+    """Mutable cycle state threaded across cycles."""
 
-    round_counter: int = 0
+    cycle_counter: int = 0
     active_version: PromptArtifact = field(default_factory=lambda: CLASSIFICATION_PROMPT_V0)
     active_version_path: str = ""
     thesis_bank_path: str = ""
     clusters_path: str = ""
     candidate_queue: list[dict[str, Any]] = field(default_factory=list)
-    rollback_counter: int = 0
     latest_report_path: str = ""
     accepted_history: list[str] = field(default_factory=list)
     rollback_history: list[dict[str, Any]] = field(default_factory=list)
     run_id: str = ""
-    last_round_new_candidates: int = 0
+    last_cycle_new_candidates: int = 0
+    cycle_number: int = 0
+    cluster_index: int = 0
+    any_accepted: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-safe dict."""
@@ -91,17 +93,20 @@ def load_state(path: str) -> CycleState:
         sha256=version_dict.get("sha256", ""),
     )
     return CycleState(
-        round_counter=int(data.get("round_counter", 0)),
+        cycle_counter=int(data.get("cycle_counter", data.get("round_counter", 0))),
         active_version=active_version,
         active_version_path=data.get("active_version_path", ""),
         thesis_bank_path=data.get("thesis_bank_path", ""),
         clusters_path=data.get("clusters_path", ""),
         candidate_queue=list(data.get("candidate_queue", [])),
-        rollback_counter=int(data.get("rollback_counter", 0)),
         latest_report_path=data.get("latest_report_path", ""),
         accepted_history=list(data.get("accepted_history", [])),
         rollback_history=list(data.get("rollback_history", [])),
         run_id=data.get("run_id", ""),
+        last_cycle_new_candidates=int(data.get("last_cycle_new_candidates", 0)),
+        cycle_number=int(data.get("cycle_number", 0)),
+        cluster_index=int(data.get("cluster_index", 0)),
+        any_accepted=bool(data.get("any_accepted", False)),
     )
 
 

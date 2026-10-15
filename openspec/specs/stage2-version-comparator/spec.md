@@ -69,55 +69,43 @@ by the same stage1-metrics component used for the baseline.
 
 ### Requirement: Compare metrics
 The component SHALL compare the new version's metrics against the active
-version's metrics on dev. The comparison SHALL include accuracy, macro-F1, and
-minority-class F1. The component SHALL report the difference for each metric.
+version's metrics on holdout. The comparison SHALL include accuracy,
+macro-F1, and minority-class F1. The component SHALL report the difference
+for each metric. Holdout metrics SHALL drive the accept/rollback decision.
+Dev metrics SHALL be logged for visibility but SHALL NOT participate in the
+decision.
 
 #### Scenario: Comparison reported
 - **WHEN** the new version is evaluated
-- **THEN** the difference in accuracy, macro-F1, and minority-class F1 relative
-  to the active version is reported
+- **THEN** the difference in accuracy, macro-F1, and minority-class F1
+  relative to the active version is reported
 
 #### Scenario: Metrics on holdout
 - **WHEN** metrics are computed on holdout
-- **THEN** they are logged but SHALL NOT participate in the accept/rollback
-  decision
+- **THEN** they drive the accept/rollback decision
 
 ### Requirement: Decision rule
-The component SHALL decide to accept the new version when its macro-F1 on dev is
-greater than or equal to the active version's macro-F1. When macro-F1 is equal,
-the component SHALL use minority-class F1 as the tie-breaker. When both macro-F1
-and minority-class F1 are lower, the component SHALL decide to roll back.
+The component SHALL decide to accept the new version only when its
+decision metric on holdout is **strictly greater** than the active
+version's. When the decision metric is equal or lower, the component SHALL
+decide to roll back. The tie-breaker metric SHALL NOT be used in the
+decision; it SHALL be logged for visibility only.
 
 #### Scenario: Accept on improvement
-- **WHEN** the new version's macro-F1 is higher than the active version's
+- **WHEN** the new version's holdout decision metric is strictly higher than
+  the active version's
 - **THEN** the new version is accepted
 
 #### Scenario: Accept on tie
-- **WHEN** the new version's macro-F1 equals the active version's and
-  minority-class F1 is higher
-- **THEN** the new version is accepted
+- **WHEN** the new version's holdout decision metric equals the active
+  version's
+- **THEN** the new version is rolled back (strict improvement required; a
+  tie is not sufficient)
 
 #### Scenario: Rollback on degradation
-- **WHEN** the new version's macro-F1 is lower than the active version's
+- **WHEN** the new version's holdout decision metric is lower than the
+  active version's
 - **THEN** the new version is rolled back
-
-### Requirement: Rollback counter
-The component SHALL maintain a counter of consecutive rollbacks. The counter
-SHALL be reset to zero on acceptance. When the counter reaches
-`max_consecutive_rollbacks` (default 2), the component SHALL stop the cycle and
-log the stop reason.
-
-#### Scenario: Counter reset on accept
-- **WHEN** a version is accepted
-- **THEN** the rollback counter is reset to zero
-
-#### Scenario: Counter incremented on rollback
-- **WHEN** a version is rolled back
-- **THEN** the rollback counter is incremented by one
-
-#### Scenario: Cycle stops after two rollbacks
-- **WHEN** the rollback counter reaches two
-- **THEN** the cycle stops and the stop reason is logged
 
 ### Requirement: Next candidate on rollback
 The component SHALL return the next candidate from the candidate queue when a
@@ -172,14 +160,17 @@ metrics for both, differences, rollback count, and final decision.
   `rollback_count`, and `decision`
 
 ### Requirement: Configurable parameters
-The component SHALL support configuration via config for
-`max_consecutive_rollbacks` (default 2), `decision_metric` (default `macro_f1`),
-and `tie_breaker_metric` (default `minority_f1`).
+The component SHALL support configuration via config for `decision_metric`
+(default `macro_f1`) and `tie_breaker_metric` (default `minority_f1`). The
+`tie_breaker_metric` SHALL be logged but SHALL NOT influence the
+accept/rollback decision. The `max_consecutive_rollbacks` parameter SHALL
+no longer be used.
 
 #### Scenario: Custom rollback limit
-- **WHEN** config sets `max_consecutive_rollbacks=3`
-- **THEN** the cycle stops after three consecutive rollbacks
+- **WHEN** config sets `max_consecutive_rollbacks`
+- **THEN** the value is ignored; the cycle orchestrator's `no_improvement`
+  stop condition governs stopping instead
 
 #### Scenario: Custom decision metric
 - **WHEN** config sets `decision_metric=accuracy`
-- **THEN** the decision is based on accuracy instead of macro-F1
+- **THEN** the decision is based on accuracy on holdout instead of macro-F1

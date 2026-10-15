@@ -385,16 +385,37 @@ def increment_version(base_version: str) -> str:
     return f"{base_version}-next"
 
 
+def intermediate_version(cycle: int, cluster: int) -> str:
+    """Return the intermediate version name for cycle N, cluster k.
+
+    >>> intermediate_version(2, 3)
+    'v2_3'
+    """
+    return f"v{cycle}_{cluster}"
+
+
+def finalized_version(cycle: int) -> str:
+    """Return the finalized version name for cycle N.
+
+    >>> finalized_version(2)
+    'v2'
+    """
+    return f"v{cycle}"
+
+
 def assemble_prompt(
     base_layers: dict[str, str],
     accepted_rules: list[str],
     base_version: str,
+    version_str: str | None = None,
 ) -> PromptArtifact:
     """Assemble a new prompt version from base layers plus accepted rules.
 
     The rules section is replaced entirely by accepted_rules. The layer order
     is role, task, rules, output contract, fallback. The base layers are carried
-    over unchanged.
+    over unchanged. When ``version_str`` is provided it is used as the version
+    name; otherwise the version is derived from ``base_version`` via
+    ``increment_version``.
     """
     layers = PromptLayer(
         role=base_layers["role"],
@@ -403,7 +424,7 @@ def assemble_prompt(
         output_contract=base_layers["output_contract"],
         fallback=base_layers["fallback"],
     )
-    new_version = increment_version(base_version)
+    new_version = version_str if version_str is not None else increment_version(base_version)
     text = render(layers)
     sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     return PromptArtifact(
@@ -463,6 +484,7 @@ async def compose(
     async_task: Any,
     base_version: str,
     existing_rules: list[str] | None = None,
+    version_str: str | None = None,
 ) -> tuple[PromptArtifact, list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
     """Run the full composition pipeline over all candidates.
 
@@ -553,7 +575,7 @@ async def compose(
         rules_with_lineage.append({"cluster_id": cluster_id, "text": rule})
 
     all_rules = list(existing_rules or []) + accepted_rules
-    prompt_artifact = assemble_prompt(base_layers, all_rules, base_version)
+    prompt_artifact = assemble_prompt(base_layers, all_rules, base_version, version_str=version_str)
 
     rejected_limits = 0
     final_rules_count = len(all_rules)

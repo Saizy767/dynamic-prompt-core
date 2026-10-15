@@ -22,16 +22,10 @@ log = logging.getLogger(__name__)
 
 VALID_STOP_REASONS = frozenset(
     {
-        "max_rounds_reached",
-        "max_rollbacks_reached",
-        "candidate_queue_exhausted",
+        "max_cycles_reached",
+        "no_improvement",
         "unrecoverable_error",
         "plateau_detected",
-        "metric_degradation",
-        "no_candidates_available",
-        "budget_exhausted",
-        "rule_stagnation",
-        "rollback_streak",
     }
 )
 
@@ -59,15 +53,15 @@ def write_report(
     run_repository: RunRepository,
     output_dir: str,
 ) -> str:
-    """Serialize a per-round report to ``report_cycle/report_{run_id}_round{N}_{ts}.json``."""
+    """Serialize a per-cycle report to ``report_cycle/report_{run_id}_cycle{N}_{ts}.json``."""
     output_dir = os.path.join(output_dir, "report_cycle")
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    name = f"report_{run_id}_round{round_number}_{timestamp}.json"
+    name = f"report_{run_id}_cycle{round_number}_{timestamp}.json"
     path = os.path.join(output_dir, name)
 
     report = {
-        "round": round_number,
+        "cycle": round_number,
         "active_version_at_start": active_version_at_start,
         "new_version": new_version,
         "decision": decision,
@@ -117,7 +111,7 @@ def write_summary(
     path = os.path.join(output_dir, name)
 
     summary = {
-        "total_rounds": state.round_counter,
+        "total_cycles": state.cycle_counter,
         "stop_reason": stop_reason,
         "final_active_version": state.active_version.version,
         "final_dev_metrics": final_dev_metrics,

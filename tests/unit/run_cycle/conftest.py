@@ -214,7 +214,7 @@ def build_mock_deps():
 
 @pytest.fixture
 def cycle_config():
-    return CycleConfig(max_rounds=3, run_id="test-run")
+    return CycleConfig(max_cycles=3, run_id="test-run")
 
 
 @pytest.fixture

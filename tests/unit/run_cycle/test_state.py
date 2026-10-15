@@ -15,10 +15,11 @@ from dynamic_prompt_core.domain.prompts.base import PromptArtifact
 
 def test_dump_state_produces_valid_json(tmp_path, mock_run_repository):
     """dump_state produces a valid JSON file with run_id and timestamp."""
-    state = CycleState(round_counter=2, run_id="test-run")
+    state = CycleState(cycle_counter=2, run_id="test-run")
     state.thesis_bank_path = "thesis.json"
     state.candidate_queue = [{"cluster_id": 1}]
-    state.rollback_counter = 1
+    state.cycle_number = 2
+    state.cluster_index = 1
 
     path = dump_state(state, mock_run_repository, str(tmp_path))
     assert path.endswith(".json")
@@ -26,17 +27,19 @@ def test_dump_state_produces_valid_json(tmp_path, mock_run_repository):
     data = json.loads(open(path).read())
     if isinstance(data, list):
         data = data[0]
-    assert data["round_counter"] == 2
-    assert data["rollback_counter"] == 1
+    assert data["cycle_counter"] == 2
+    assert data["cycle_number"] == 2
+    assert data["cluster_index"] == 1
 
 
 def test_load_state_reproduces_all_fields(tmp_path, mock_run_repository):
-    """load_state reproduces round_counter, candidate_queue, rollback_counter."""
+    """load_state reproduces cycle_counter, candidate_queue, cycle_number, cluster_index."""
     state = CycleState(
-        round_counter=3,
+        cycle_counter=3,
         run_id="test-run",
         thesis_bank_path="thesis.json",
-        rollback_counter=2,
+        cycle_number=3,
+        cluster_index=2,
     )
     state.candidate_queue = [{"cluster_id": 5}, {"cluster_id": 6}]
     state.accepted_history = ["v0", "v1"]
@@ -44,8 +47,9 @@ def test_load_state_reproduces_all_fields(tmp_path, mock_run_repository):
     path = dump_state(state, mock_run_repository, str(tmp_path))
     loaded = load_state(path)
 
-    assert loaded.round_counter == 3
-    assert loaded.rollback_counter == 2
+    assert loaded.cycle_counter == 3
+    assert loaded.cycle_number == 3
+    assert loaded.cluster_index == 2
     assert len(loaded.candidate_queue) == 2
     assert loaded.candidate_queue[0]["cluster_id"] == 5
     assert loaded.accepted_history == ["v0", "v1"]
@@ -55,7 +59,7 @@ def test_load_state_reproduces_all_fields(tmp_path, mock_run_repository):
 def test_load_state_preserves_active_version(tmp_path, mock_run_repository):
     """load_state preserves the active version."""
     custom_prompt = PromptArtifact(version="v3", layers=None, text="custom")
-    state = CycleState(round_counter=1, active_version=custom_prompt, run_id="r")
+    state = CycleState(cycle_counter=1, active_version=custom_prompt, run_id="r")
     path = dump_state(state, mock_run_repository, str(tmp_path))
     loaded = load_state(path)
     assert loaded.active_version.version == "v3"
@@ -86,11 +90,12 @@ def test_update_in_prompt_flags_sets_correct_values(tmp_path):
 
 
 def test_resume_from_dumped_state_preserves_fields(tmp_path, mock_run_repository):
-    """Resume from a dumped state at round 3 preserves all fields."""
+    """Resume from a dumped state at cycle 3 preserves all fields."""
     state = CycleState(
-        round_counter=3,
+        cycle_counter=3,
         run_id="resume-test",
-        rollback_counter=1,
+        cycle_number=3,
+        cluster_index=1,
         thesis_bank_path="bank.json",
         clusters_path="clusters.json",
     )
@@ -99,8 +104,9 @@ def test_resume_from_dumped_state_preserves_fields(tmp_path, mock_run_repository
     path = dump_state(state, mock_run_repository, str(tmp_path))
     loaded = load_state(path)
 
-    assert loaded.round_counter == 3
-    assert loaded.rollback_counter == 1
+    assert loaded.cycle_counter == 3
+    assert loaded.cycle_number == 3
+    assert loaded.cluster_index == 1
     assert loaded.thesis_bank_path == "bank.json"
     assert loaded.clusters_path == "clusters.json"
     assert loaded.candidate_queue == [{"cluster_id": 7}]

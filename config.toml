@@ -29,8 +29,8 @@ port = 8080
 
 # Inference parameters passed to the backend.
 ctx_size = 4096      # llamacpp: -c (context window); vllm: --max-model-len
-gpu_layers = 8       # llamacpp: -ngl (layers in VRAM; 0 = CPU-only, -1 = all)
-threads = 4          # llamacpp: -t (CPU threads); vllm: ignored
+gpu_layers = -1       # llamacpp: -ngl (layers in VRAM; 0 = CPU-only, -1 = all)
+threads = 2          # llamacpp: -t (CPU threads); vllm: ignored
 
 # Seconds to wait for GET /v1/models to return 200 before giving up.
 # llama-server is fast (~10s); vllm model load can take minutes.
@@ -52,7 +52,7 @@ model_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
 [model.gguf]
 n_ctx = 2048
 n_batch = 512
-n_gpu_layers = 8
+n_gpu_layers = 16
 seed = 42
 verbose = false
 logits_all = true
@@ -87,7 +87,7 @@ candidates = ["0", "1"]
 # asyncTask.py and dataset.py ignore this section.
 [runner]
 # Max concurrent in-flight model requests. Conservative for CPU llama-server.
-concurrency = 4
+concurrency = 2
 # fsync the checkpoint every N examples (1 = maximum durability).
 checkpoint_interval = 1
 # Directory for results artifacts and request logs.
@@ -185,15 +185,12 @@ output_dir = "data/results"
 # Stage 2 version comparator configuration (version_comparator.py).
 # prompt_composer.py and earlier stages ignore this section.
 [version_comparator]
-# Maximum number of consecutive rollbacks before the optimization cycle stops.
-# When the counter reaches this limit, the cycle stops and the stop reason is
-# logged. 2 is conservative for small dev splits; raise to allow more attempts.
-max_consecutive_rollbacks = 2
-# Primary metric for the accept/rollback decision. The new version is accepted
-# when its value is >= the active version's. Options: macro_f1, accuracy.
+# Primary metric for the accept/rollback decision on holdout. The new version
+# is accepted only when its value is strictly greater than the active's.
+# Options: macro_f1, accuracy.
 decision_metric = "macro_f1"
-# Tie-breaker metric used when the primary metric is equal. The new version is
-# accepted only when its value is strictly higher. Options: minority_f1, accuracy.
+# Tie-breaker metric, logged for visibility but not used in the decision.
+# Options: minority_f1, accuracy.
 tie_breaker_metric = "minority_f1"
 # Directory for decision artifacts.
 output_dir = "data/results"
@@ -202,11 +199,11 @@ output_dir = "data/results"
 # This is the top-level entry point that drives the full optimization loop.
 # All earlier stage components are called via their public APIs.
 [cycle_orchestrator]
-# Maximum number of rounds to run. Each round runs the active prompt on dev,
+# Maximum number of cycles to run. Each cycle runs the active prompt on dev,
 # computes metrics, updates the thesis bank, selects candidates, composes a new
-# version, runs it on dev, and decides accept/rollback. The cycle stops when
-# the round counter reaches this limit.
-max_rounds = 10
+# version, runs it on holdout, and decides accept/rollback. The cycle stops when
+# the cycle counter reaches this limit.
+max_cycles = 10
 # Number of dataset rows to process per round.
 #   0  — process all rows in the split (default).
 #   N  — process N rows in every round.
@@ -234,9 +231,9 @@ candidate_queue_path = ""
 # When true, any step failure stops the cycle immediately with stop reason
 # unrecoverable_error. When false, only unrecoverable errors stop the cycle.
 stop_on_first_error = false
-# When true, the full cycle state is dumped to a JSON file after each round,
-# enabling resume from the last completed round.
-dump_state_after_each_round = true
+# When true, the full cycle state is dumped to a JSON file after each cycle,
+# enabling resume from the last completed cycle.
+dump_state_after_each_cycle = true
 # Format for per-round reports and the final summary. Currently only "json" is
 # supported; "markdown" may be added in a future change.
 report_format = "json"

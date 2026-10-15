@@ -16,8 +16,7 @@ if TYPE_CHECKING:
         StopCriteriaConfig,
     )
 
-DEFAULT_MAX_ROUNDS = 5
-DEFAULT_MAX_CONSECUTIVE_ROLLBACKS = 2
+DEFAULT_MAX_CYCLES = 5
 DEFAULT_DECISION_METRIC = "macro_f1"
 DEFAULT_TIE_BREAKER_METRIC = "minority_f1"
 DEFAULT_DEV_SPLIT = "dev"
@@ -29,15 +28,14 @@ DEFAULT_OUTPUT_DIR = "data/results"
 class CycleConfig:
     """Configuration for a single optimization cycle run.
 
-    ``duration`` controls how many dataset rows each round processes:
+    ``duration`` controls how many dataset rows each cycle processes:
     - ``0`` (default): process all rows in the split.
-    - positive ``int``: process that many rows in every round.
-    - ``list[int]``: run ``len(list)`` rounds, round *i* processes
-      ``list[i]`` rows (overrides ``max_rounds``).
+    - positive ``int``: process that many rows in every cycle.
+    - ``list[int]``: run ``len(list)`` cycles, cycle *i* processes
+      ``list[i]`` rows (overrides ``max_cycles``).
     """
 
-    max_rounds: int = DEFAULT_MAX_ROUNDS
-    max_consecutive_rollbacks: int = DEFAULT_MAX_CONSECUTIVE_ROLLBACKS
+    max_cycles: int = DEFAULT_MAX_CYCLES
     decision_metric: str = DEFAULT_DECISION_METRIC
     tie_breaker_metric: str = DEFAULT_TIE_BREAKER_METRIC
     dev_split: str = DEFAULT_DEV_SPLIT
@@ -49,23 +47,23 @@ class CycleConfig:
     thesis_bank_path: str = ""
     candidate_queue_path: str = ""
     stop_on_first_error: bool = False
-    dump_state_after_each_round: bool = True
+    dump_state_after_each_cycle: bool = True
     use_teacher_refinement: bool = False
     duration: int | list[int] = 0
     stop_criteria_config: StopCriteriaConfig | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.duration, list) and self.duration:
-            object.__setattr__(self, "max_rounds", len(self.duration))
+            object.__setattr__(self, "max_cycles", len(self.duration))
 
-    def duration_for_round(self, round_number: int) -> int | None:
-        """Return the row limit for a given 1-indexed round number.
+    def duration_for_cycle(self, cycle_number: int) -> int | None:
+        """Return the row limit for a given 1-indexed cycle number.
 
         Returns ``None`` when all rows should be processed.
         """
         d = self.duration
         if isinstance(d, list):
-            idx = round_number - 1
+            idx = cycle_number - 1
             if 0 <= idx < len(d):
                 val = d[idx]
                 return val if val > 0 else None
@@ -87,15 +85,12 @@ class CycleConfig:
         else:
             duration = int(raw_duration)
 
-        max_rounds = int(s.get("max_rounds", DEFAULT_MAX_ROUNDS))
+        max_cycles = int(s.get("max_cycles", DEFAULT_MAX_CYCLES))
         if isinstance(duration, list) and duration:
-            max_rounds = len(duration)
+            max_cycles = len(duration)
 
         return cls(
-            max_rounds=max_rounds,
-            max_consecutive_rollbacks=int(
-                s.get("max_consecutive_rollbacks", DEFAULT_MAX_CONSECUTIVE_ROLLBACKS)
-            ),
+            max_cycles=max_cycles,
             decision_metric=s.get("decision_metric", DEFAULT_DECISION_METRIC),
             tie_breaker_metric=s.get("tie_breaker_metric", DEFAULT_TIE_BREAKER_METRIC),
             dev_split=s.get("dev_split", DEFAULT_DEV_SPLIT),
@@ -107,7 +102,7 @@ class CycleConfig:
             thesis_bank_path=s.get("thesis_bank_path", ""),
             candidate_queue_path=s.get("candidate_queue_path", ""),
             stop_on_first_error=bool(s.get("stop_on_first_error", False)),
-            dump_state_after_each_round=bool(s.get("dump_state_after_each_round", True)),
+            dump_state_after_each_cycle=bool(s.get("dump_state_after_each_cycle", True)),
             use_teacher_refinement=bool(s.get("use_teacher_refinement", False)),
             duration=duration,
         )

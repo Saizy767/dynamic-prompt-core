@@ -120,12 +120,12 @@ and resumability from a dumped state.
 
 ### Requirement: Load configuration
 `run_cycle` SHALL accept cycle configuration as a typed object (`CycleConfig`)
-containing `max_rounds` (default 5), `max_consecutive_rollbacks` (default 2),
-`decision_metric` (default `macro_f1`), `tie_breaker_metric` (default
-`minority_f1`), `dev_split`, `holdout_split`, artifact paths, `run_id`,
-`stop_on_first_error` (default false), `dump_state_after_each_round` (default
-true), and `use_teacher_refinement` (default false). The configuration SHALL be
-loaded by the composition root and passed in. The use case SHALL NOT read
+containing `max_cycles` (default 5), `decision_metric` (default `macro_f1`),
+`tie_breaker_metric` (default `minority_f1`), `dev_split`, `holdout_split`,
+artifact paths, `run_id`, `stop_on_first_error` (default false),
+`dump_state_after_each_cycle` (default true), and
+`use_teacher_refinement` (default false). The configuration SHALL be loaded
+by the composition root and passed in. The use case SHALL NOT read
 `config.toml` directly.
 
 #### Scenario: Valid configuration loads
@@ -161,46 +161,55 @@ artifact when the active version or dataset is not found.
 - **THEN** the use case raises an exception naming the missing dataset
 
 ### Requirement: Run a single round
-`run_cycle` SHALL execute a single round as a fixed sequence of steps:
+`run_cycle` SHALL execute a single cycle as a fixed sequence of steps:
 
-1. Run the active prompt version on dev via `stage1-baseline-runner`.
-2. Compute metrics via `stage1-metrics`.
+1. Run the active prompt version on dev via `stage1-baseline-runner` with
+   thesis extraction enabled. This is the only dev run in the cycle.
+2. Compute dev metrics via `stage1-metrics` for logging.
 3. Update the thesis collection and clusters via `stage1-thesis-analyzer`.
 4. Select rule candidates via `stage2-rule-candidate-selector`.
-5. Greedily accumulate rules from the candidate queue:
-   a. Compose a new prompt version from the next candidate via
+5. Run the active version on holdout via `stage1-baseline-runner` with
+   thesis extraction disabled. Cache the holdout metrics as the baseline
+   for the accumulation loop.
+6. Greedily accumulate rules from the candidate queue:
+   a. Compose a new prompt version `vN_k` from the next candidate via
       `stage3-prompt-composer`, appending the new rule to the rules already
-      accepted in this round.
-   b. Run the new version on dev via `stage1-baseline-runner`.
-   c. Compare the new version against the current best version via
-      `stage2-version-comparator`.
-   d. When the new version does not degrade the decision metric, accept it:
-      update the current best version, mark the candidate's cluster as
-      `in_prompt`, and continue to the next candidate (step 5a).
-   e. When the new version degrades the decision metric, stop accumulation:
-      discard the candidate's rule, keep the current best version, and
-      proceed to step 6.
+      accepted in this cycle.
+   b. Run `vN_k` on holdout only (no dev run per candidate) via
+      `stage1-baseline-runner` with thesis extraction disabled.
+   c. Compare `vN_k` against the current best version via
+      `stage2-version-comparator` using holdout metrics.
+   d. When `vN_k`'s holdout metric is strictly greater than the current
+      best, accept it: update the current best version, mark the
+      candidate's cluster as `in_prompt`, and continue to the next
+      candidate (step 6a).
+   e. When `vN_k`'s holdout metric is not strictly greater (equal or
+      lower), stop accumulation: discard the candidate's rule, keep the
+      current best version, and proceed to step 7.
    f. When the number of accumulated rules reaches `max_rules`, stop
-      accumulation and proceed to step 6.
-   g. When the candidate queue is exhausted, proceed to step 6.
-6. Update the active version to the current best version.
-7. Write the per-round report and state dump.
+      accumulation and proceed to step 7.
+   g. When the candidate queue is exhausted, proceed to step 7.
+7. Finalize the current best version as `vN`.
+8. Write the per-cycle report and state dump.
 
-The round SHALL NOT end on the first acceptance. The cycle SHALL continue
+The cycle SHALL NOT end on the first acceptance. The cycle SHALL continue
 trying candidates until degradation, the `max_rules` limit, or queue
-exhaustion.
+exhaustion. Candidate versions SHALL NOT be run on dev — only holdout.
 
 #### Scenario: Round completes
-- **WHEN** a round is executed
-- **THEN** steps 1–7 are performed in order
+- **WHEN** a cycle is executed
+- **THEN** steps 1–8 are performed in order
 
 #### Scenario: Multiple rules accumulated
-- **WHEN** candidates 1 and 2 both improve the metric and candidate 3 degrades it
-- **THEN** the round ends with the active version containing rules from candidates 1 and 2, and candidate 3's rule is discarded
+- **WHEN** candidates 1 and 2 both strictly improve the holdout metric and
+  candidate 3 does not
+- **THEN** the cycle ends with the finalized version containing rules from
+  candidates 1 and 2, and candidate 3's rule is discarded
 
 #### Scenario: First candidate degrades
-- **WHEN** the first candidate degrades the metric
-- **THEN** the round ends with the active version unchanged (no rules added) and the rollback counter is incremented
+- **WHEN** the first candidate does not strictly improve the holdout metric
+- **THEN** the cycle ends with the active version unchanged (no rules added)
+  and the process stops with reason `no_improvement`
 
 #### Scenario: Accumulation stops at max_rules
 - **WHEN** the number of accepted rules reaches `max_rules`
@@ -208,70 +217,52 @@ exhaustion.
 
 #### Scenario: Step failure
 - **WHEN** a step fails with an unrecoverable error
-- **THEN** the round is aborted and the cycle stops with an error naming the failing step
+- **THEN** the cycle is aborted and the process stops with an error naming the failing step
 
 ### Requirement: Round counter
-`run_cycle` SHALL maintain a round counter starting at 0. Each successfully
-completed round SHALL increment the counter by one. The cycle SHALL stop with
-reason `max_rounds_reached` when the counter reaches `max_rounds`.
+`run_cycle` SHALL maintain a cycle counter starting at 0. Each successfully
+completed cycle SHALL increment the counter by one. The process SHALL stop
+with reason `max_cycles_reached` when the counter reaches `max_cycles`.
 
 #### Scenario: Counter increments
-- **WHEN** a round completes successfully
-- **THEN** the round counter is incremented by one
+- **WHEN** a cycle completes successfully
+- **THEN** the cycle counter is incremented by one
 
 #### Scenario: Cycle stops at max rounds
-- **WHEN** the counter reaches `max_rounds`
-- **THEN** the cycle stops with reason `max_rounds_reached`
+- **WHEN** the cycle counter reaches `max_cycles`
+- **THEN** the process stops with reason `max_cycles_reached`
 
 ### Requirement: Candidate queue
 `run_cycle` SHALL maintain a candidate queue populated by the
-`stage2-rule-candidate-selector` at the start of each round. The queue SHALL be
-consumed in order during greedy accumulation. When accumulation stops due to
-degradation, remaining candidates SHALL stay in the queue for the next round.
-When the queue is exhausted without any acceptance and the rollback counter
-exceeds `max_consecutive_rollbacks`, the cycle SHALL stop with reason
-`candidate_queue_exhausted`.
+`stage2-rule-candidate-selector` at the start of each cycle. The queue SHALL
+be consumed in order during greedy accumulation. When accumulation stops due
+to degradation, remaining candidates SHALL stay in the queue for the next
+cycle. The queue SHALL be refilled from the current cycle's selection at the
+start of each cycle.
 
 #### Scenario: Queue consumed in order
 - **WHEN** the composer requests a candidate
 - **THEN** the next candidate from the queue is returned
 
 #### Scenario: Queue refilled each round
-- **WHEN** a new round starts
-- **THEN** the queue is refilled from the current round's selection
+- **WHEN** a new cycle starts
+- **THEN** the queue is refilled from the current cycle's selection
 
 #### Scenario: Remaining candidates preserved on degradation
 - **WHEN** accumulation stops due to degradation with candidates remaining
-- **THEN** the remaining candidates stay in the queue for the next round
+- **THEN** the remaining candidates stay in the queue for the next cycle
 
 #### Scenario: Queue exhausted without acceptance
 - **WHEN** the queue is exhausted and no candidate was accepted
-- **THEN** the rollback counter is incremented
-
-### Requirement: Rollback state
-`run_cycle` SHALL track consecutive rollbacks. A round in which no candidate
-was accepted SHALL increment the rollback counter. A round with at least one
-acceptance SHALL reset the rollback counter to zero. When the rollback counter
-reaches `max_consecutive_rollbacks`, the cycle SHALL stop with reason
-`max_rollbacks_reached`.
-
-#### Scenario: No acceptance increments rollback
-- **WHEN** a round ends with no candidate accepted
-- **THEN** the rollback counter is incremented
-
-#### Scenario: Acceptance resets rollback
-- **WHEN** a round ends with at least one candidate accepted
-- **THEN** the rollback counter is reset to zero
-
-#### Scenario: Cycle stops after max rollbacks
-- **WHEN** the rollback counter reaches `max_consecutive_rollbacks`
-- **THEN** the cycle stops with reason `max_rollbacks_reached`
+- **THEN** the process stops with reason `no_improvement`
 
 ### Requirement: Holdout without thesis extraction
 `run_cycle` SHALL run holdout evaluation with thesis extraction disabled. The
 holdout run SHALL only perform candidate-scoring classification for metrics
-computation and SHALL NOT call `extract_theses_detailed`. Holdout metrics SHALL
-be logged only and SHALL NOT influence the accept/rollback decision.
+computation and SHALL NOT call `extract_theses_detailed`. Holdout metrics
+SHALL drive the accept/rollback decision in the accumulation loop. The active
+version's holdout metrics SHALL be computed once per cycle and cached as the
+baseline for comparison.
 
 #### Scenario: Holdout skips thesis extraction
 - **WHEN** the holdout evaluation runs
@@ -279,7 +270,8 @@ be logged only and SHALL NOT influence the accept/rollback decision.
 
 #### Scenario: Holdout metrics logged only
 - **WHEN** holdout metrics are computed
-- **THEN** they are included in the per-round report but are not used in the accept/rollback decision
+- **THEN** they drive the accept/rollback decision and are included in the
+  per-cycle report
 
 ### Requirement: Accept updates active version
 When a new version is accepted, `run_cycle` SHALL activate the new version via
@@ -306,15 +298,16 @@ whose clusters produced accepted rules, `false` for all others.
   new rule set
 
 ### Requirement: Per-round report
-`run_cycle` SHALL produce a per-round report after each completed round. The
-report SHALL contain: round number, active version at round start, new version
-composed, decision (accept or rollback), dev metrics for both versions, holdout
-metrics for both versions (logged only, not used in decisions), rollback
-counter value, list of changed decision ids, and next action. The report SHALL
-be saved via `run_repository`.
+`run_cycle` SHALL produce a per-cycle report after each completed cycle. The
+report SHALL contain: cycle number, active version (base) at cycle start,
+finalized version, decision (accept or no improvement), dev metrics for the
+active version (from step 1), holdout metrics for the active version and the
+finalized version, the list of `vN_k` intermediate attempts with their
+holdout metrics and accept/rollback decisions, accepted cluster ids, and next
+action. The report SHALL be saved via `run_repository`.
 
 #### Scenario: Report written
-- **WHEN** a round completes
+- **WHEN** a cycle completes
 - **THEN** a report is written with all required fields
 
 #### Scenario: Report readable
@@ -322,38 +315,38 @@ be saved via `run_repository`.
 - **THEN** all fields are available without recomputation
 
 ### Requirement: Final summary
-`run_cycle` SHALL produce a final summary when the cycle stops. The summary
-SHALL contain: total rounds executed, stop reason, final active version, final
+`run_cycle` SHALL produce a final summary when the process stops. The summary
+SHALL contain: total cycles executed, stop reason, final active version, final
 dev and holdout metrics, history of accepted versions, history of rollbacks,
-and the list of all changed decisions across rounds. The summary SHALL be saved
-via `run_repository`. The stop reason SHALL be one of: `max_rounds_reached`,
-`max_rollbacks_reached`, `candidate_queue_exhausted`, `unrecoverable_error`.
+and the list of all changed decisions across cycles. The summary SHALL be
+saved via `run_repository`. The stop reason SHALL be one of:
+`max_cycles_reached`, `no_improvement`, `unrecoverable_error`,
+`plateau_detected`.
 
 #### Scenario: Summary written on stop
-- **WHEN** the cycle stops for any reason
+- **WHEN** the process stops for any reason
 - **THEN** a final summary is written with all required fields
 
 #### Scenario: Stop reasons enumerated
-- **WHEN** the cycle stops
-- **THEN** the stop reason is one of: `max_rounds_reached`,
-  `max_rollbacks_reached`, `candidate_queue_exhausted`,
-  `unrecoverable_error`
+- **WHEN** the process stops
+- **THEN** the stop reason is one of: `max_cycles_reached`,
+  `no_improvement`, `unrecoverable_error`, `plateau_detected`
 
 ### Requirement: State dump
-`run_cycle` SHALL save the cycle state after each round via `run_repository`.
-The state SHALL contain: round counter, active version, thesis collection,
-clusters, candidate queue, rollback counter, and the path to the latest report.
-The state SHALL be sufficient to resume the cycle without re-running completed
-rounds.
+`run_cycle` SHALL save the cycle state after each cycle via
+`run_repository`. The state SHALL contain: cycle counter, cycle number,
+cluster index, active version, thesis collection, clusters, candidate queue,
+and the path to the latest report. The state SHALL be sufficient to resume
+the process without re-running completed cycles.
 
 #### Scenario: State dumped
-- **WHEN** a round completes
+- **WHEN** a cycle completes
 - **THEN** the full state is saved
 
 #### Scenario: State reloaded
 - **WHEN** the state is loaded
-- **THEN** the cycle can resume from the same point without re-running
-  completed rounds
+- **THEN** the process can resume from the same point without re-running
+  completed cycles
 
 ### Requirement: Resumability
 `run_cycle` SHALL support resuming the cycle from a saved state. On resume,
@@ -371,34 +364,80 @@ SHALL match the saved state.
   counter match the saved state
 
 ### Requirement: Logging of cycle events
-`run_cycle` SHALL log cycle events: round start, round end, decision,
+`run_cycle` SHALL log cycle events: cycle start, cycle end, decision,
 accept/rollback, stop reason, and errors. The log SHALL be append-only. Each
-event SHALL carry a timestamp and round number. The module SHALL NOT call
+event SHALL carry a timestamp and cycle number. The module SHALL NOT call
 `logging.basicConfig`.
 
 #### Scenario: Events logged
 - **WHEN** any cycle event occurs
-- **THEN** it is appended to the cycle log with timestamp and round number
+- **THEN** it is appended to the cycle log with timestamp and cycle number
 
 #### Scenario: No logging configuration
 - **WHEN** the module is imported
 - **THEN** no logging configuration is performed
 
 #### Scenario: Log readable per round
-- **WHEN** the log is filtered by round number
-- **THEN** only events from that round are returned
+- **WHEN** the log is filtered by cycle number
+- **THEN** only events from that cycle are returned
 
 ### Requirement: Configurable parameters
-`run_cycle` SHALL support configuration via `CycleConfig` for `max_rounds`
-(default 5), `max_consecutive_rollbacks` (default 2), `decision_metric`
-(default `macro_f1`), `tie_breaker_metric` (default `minority_f1`),
-`stop_on_first_error` (default false), `dump_state_after_each_round` (default
-true), and `use_teacher_refinement` (default false).
+`run_cycle` SHALL support configuration via `CycleConfig` for `max_cycles`
+(default 5), `decision_metric` (default `macro_f1`), `tie_breaker_metric`
+(default `minority_f1`), `stop_on_first_error` (default false),
+`dump_state_after_each_cycle` (default true), and
+`use_teacher_refinement` (default false).
 
 #### Scenario: Custom max rounds
-- **WHEN** the configuration sets `max_rounds=3`
-- **THEN** the cycle stops after three rounds
+- **WHEN** the configuration sets `max_cycles=3`
+- **THEN** the process stops after three cycles
 
 #### Scenario: Stop on first error
 - **WHEN** the configuration sets `stop_on_first_error=true` and a step fails
-- **THEN** the cycle stops immediately
+- **THEN** the process stops immediately
+
+### Requirement: Cycle/cluster versioning
+`run_cycle` SHALL name intermediate prompt versions using the scheme
+`vN_k` where `N` is the cycle number and `k` is the cluster index within
+that cycle (1-indexed). The finalized best version of cycle `N` SHALL be
+renamed to `vN`. The baseline `CLASSIFICATION_PROMPT_V0` SHALL be `v0`.
+Cycle `N` starts with base `v(N-1)`, produces intermediates `vN_1`,
+`vN_2`, …, and finalizes the best as `vN`.
+
+#### Scenario: Baseline is v0
+- **WHEN** the cycle starts from `CLASSIFICATION_PROMPT_V0`
+- **THEN** the baseline version is named `v0`
+
+#### Scenario: Intermediate version naming
+- **WHEN** cycle 2 composes its third cluster candidate
+- **THEN** the intermediate version is named `v2_3`
+
+#### Scenario: Finalized version naming
+- **WHEN** cycle 2 finalizes its best version
+- **THEN** the finalized version is named `v2`
+
+#### Scenario: Next cycle base
+- **WHEN** cycle 2 finalizes `v2`
+- **THEN** cycle 3 starts with base `v2`
+
+### Requirement: No improvement stop condition
+`run_cycle` SHALL stop with reason `no_improvement` when a cycle ends with
+no candidate accepted. This occurs when the first candidate of a cycle does
+not strictly improve the holdout metric over the base version, or when the
+candidate queue is empty at the start of accumulation.
+
+#### Scenario: First candidate does not improve
+- **WHEN** the first candidate of a cycle produces a holdout metric that is
+  not strictly greater than the base
+- **THEN** the cycle ends with no candidate accepted and the process stops
+  with reason `no_improvement`
+
+#### Scenario: Empty candidate queue
+- **WHEN** the candidate queue is empty at the start of accumulation
+- **THEN** the process stops with reason `no_improvement`
+
+#### Scenario: Later candidate rollback is not no_improvement
+- **WHEN** the first candidate of a cycle is accepted but a later candidate
+  degrades
+- **THEN** the cycle finalizes the best and the process continues to the
+  next cycle (not `no_improvement`)

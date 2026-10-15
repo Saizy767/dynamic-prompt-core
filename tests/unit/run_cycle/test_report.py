@@ -37,9 +37,9 @@ def test_write_report_produces_valid_json(tmp_path, mock_run_repository):
     )
     assert path.endswith(".json")
     assert "test-run" in path
-    assert "round1" in path
+    assert "cycle1" in path
     report = json.loads(open(path).read())
-    assert report["round"] == 1
+    assert report["cycle"] == 1
     assert report["decision"] == "accept"
     assert report["metrics_dev_new"]["accuracy"] == 0.6
 
@@ -63,7 +63,7 @@ def test_load_report_round_trips(tmp_path, mock_run_repository):
         output_dir=str(tmp_path),
     )
     loaded = load_report(path)
-    assert loaded["round"] == 2
+    assert loaded["cycle"] == 2
     assert loaded["decision"] == "rollback"
     assert loaded["rollback_counter"] == 1
     assert loaded["changed_decisions"] == [{"id": 1, "direction": "broke"}]
@@ -71,20 +71,20 @@ def test_load_report_round_trips(tmp_path, mock_run_repository):
 
 def test_write_summary_valid_stop_reason(tmp_path, mock_run_repository):
     """write_summary produces a valid summary with an enumerated stop reason."""
-    state = CycleState(round_counter=3, run_id="r")
+    state = CycleState(cycle_counter=3, run_id="r")
     path = write_summary(
         state=state,
         final_dev_metrics={"accuracy": 0.8},
         final_holdout_metrics={"accuracy": 0.7},
-        stop_reason="max_rounds_reached",
+        stop_reason="max_cycles_reached",
         all_changed_decisions=[],
         run_id="r",
         run_repository=mock_run_repository,
         output_dir=str(tmp_path),
     )
     summary = json.loads(open(path).read())
-    assert summary["total_rounds"] == 3
-    assert summary["stop_reason"] == "max_rounds_reached"
+    assert summary["total_cycles"] == 3
+    assert summary["stop_reason"] == "max_cycles_reached"
 
 
 def test_write_summary_rejects_invalid_stop_reason(tmp_path, mock_run_repository):
