@@ -10,10 +10,13 @@ settings (e.g. logging verbosity).  A mismatch in a semantic setting either
 rejects the resume or explicitly records the run as a new experiment; it does
 not silently continue with a different configuration.
 """
+
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -91,17 +94,66 @@ def verify_resume_identity(
     )
 
 
+class RunMetadataError(ValueError):
+    """Raised when a manifest file is corrupted or cannot be read."""
+
+
+_manifest_counter = itertools.count()
+
+
+def _fsync_directory(directory: str) -> None:
+    """Best-effort fsync on the parent directory for crash durability."""
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
+
+
 def write_manifest(path: str, metadata: RunMetadata) -> str:
-    """Write a run metadata manifest as JSON to ``path``."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(metadata.to_dict(), f, indent=2, sort_keys=True)
+    """Write a run metadata manifest as JSON to ``path`` atomically."""
+    payload = json.dumps(metadata.to_dict(), indent=2, sort_keys=True)
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    counter_val = next(_manifest_counter)
+    tmp = os.path.join(
+        directory,
+        f".{os.path.basename(path)}.tmp.{os.getpid()}.{counter_val}",
+    )
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        with open(tmp, encoding="utf-8") as vf:
+            json.load(vf)
+        os.replace(tmp, path)
+        _fsync_directory(directory)
+    except OSError as exc:
+        raise RunMetadataError(f"failed to write manifest {path}: {exc}") from exc
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     return path
 
 
 def load_manifest(path: str) -> RunMetadata:
     """Load a run metadata manifest from JSON at ``path``."""
-    with open(path, encoding="utf-8") as f:
-        return RunMetadata.from_dict(json.load(f))
+    try:
+        with open(path, encoding="utf-8") as f:
+            return RunMetadata.from_dict(json.load(f))
+    except json.JSONDecodeError as exc:
+        raise RunMetadataError(f"corrupted manifest {path}: {exc}") from exc
+    except FileNotFoundError as exc:
+        raise RunMetadataError(f"manifest not found: {path}") from exc
 
 
 def build_run_metadata(

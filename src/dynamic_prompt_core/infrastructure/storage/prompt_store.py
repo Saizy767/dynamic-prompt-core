@@ -1,11 +1,14 @@
 """JSON-backed prompt version store implementation."""
+
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import logging
 import os
 import sys
+import threading
 import tomllib
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -43,6 +46,14 @@ class PromptStoreError(ValueError):
     """Raised when a store operation fails or the store is invalid."""
 
 
+class PromptStoreValidationError(PromptStoreError):
+    """Raised when input validation fails before any disk write."""
+
+
+class PromptStoreWriteError(PromptStoreError):
+    """Raised when a disk write or atomic replace fails."""
+
+
 @dataclass
 class PromptStoreConfig:
     store_path: str = DEFAULT_STORE_PATH
@@ -51,17 +62,13 @@ class PromptStoreConfig:
     log_path: str = DEFAULT_LOG_PATH
 
     @classmethod
-    def from_config(
-        cls, config_path: str = DEFAULT_CONFIG_PATH
-    ) -> PromptStoreConfig:
+    def from_config(cls, config_path: str = DEFAULT_CONFIG_PATH) -> PromptStoreConfig:
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
         s = config.get("prompt_store", {})
         store_path = s.get("store_path")
         if not store_path:
-            raise PromptStoreError(
-                "prompt store config missing required key: store_path"
-            )
+            raise PromptStoreError("prompt store config missing required key: store_path")
         max_versions = s.get("max_versions")
         if max_versions is not None:
             max_versions = int(max_versions)
@@ -96,16 +103,52 @@ def _validate_record(record: dict[str, Any]) -> None:
     """Validate that *record* has all required fields and a correct hash."""
     for name in REQUIRED_RECORD_FIELDS:
         if name not in record:
-            raise PromptStoreError(
+            raise PromptStoreValidationError(
                 f"prompt version record missing required field: {name}"
             )
     expected_hash = _sha256_hex(record["text"])
     if record["hash"] != expected_hash:
-        raise PromptStoreError(
+        raise PromptStoreValidationError(
             f"prompt version record hash mismatch for version "
             f"{record['version']}: expected {expected_hash}, "
             f"got {record['hash']}"
         )
+
+
+def _validate_document(versions: dict[str, dict[str, Any]]) -> None:
+    """Validate the full document before serialization to disk.
+
+    Checks top-level structure, each record's required fields and hash,
+    and JSON serializability.  Raises :class:`PromptStoreValidationError`
+    on any problem.
+    """
+    if not isinstance(versions, dict):
+        raise PromptStoreValidationError("versions is not a dict")
+    for key, record in versions.items():
+        if not isinstance(record, dict):
+            raise PromptStoreValidationError(f"version record for key {key!r} is not a dict")
+        _validate_record(record)
+    try:
+        json.dumps(
+            {"schema_version": SCHEMA_VERSION, "versions": versions},
+            ensure_ascii=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise PromptStoreValidationError(f"document is not JSON-serializable: {exc}") from exc
+
+
+def _fsync_directory(directory: str) -> None:
+    """Best-effort fsync on the parent directory for crash durability."""
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
 
 
 def _normalize_input(
@@ -147,6 +190,8 @@ class PromptStore:
 
     def __init__(self, config: PromptStoreConfig) -> None:
         self.config = config
+        self._lock = threading.RLock()
+        self._write_counter = itertools.count()
         self._versions: dict[str, dict[str, Any]] = self.load()
 
     def load(self) -> dict[str, dict[str, Any]]:
@@ -158,9 +203,7 @@ class PromptStore:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError as exc:
-            raise PromptStoreError(
-                f"corrupted prompt store file {path}: {exc}"
-            ) from exc
+            raise PromptStoreError(f"corrupted prompt store file {path}: {exc}") from exc
         if not isinstance(data, dict):
             raise PromptStoreError(
                 f"corrupted prompt store file {path}: top-level is not a JSON object"
@@ -173,7 +216,13 @@ class PromptStore:
         return cast(dict[str, dict[str, Any]], data["versions"])
 
     def _flush(self, versions: dict[str, dict[str, Any]]) -> None:
-        """Atomically write the full store to disk."""
+        """Atomically write the full store to disk from a snapshot.
+
+        When ``atomic_writes`` is enabled (default), the write goes through a
+        unique temporary file in the same directory, with ``fsync`` and
+        read-back validation before ``os.replace``.  On any failure the target
+        file is left untouched and a :class:`PromptStoreWriteError` is raised.
+        """
         path = self.config.store_path
         payload = json.dumps(
             {"schema_version": SCHEMA_VERSION, "versions": versions},
@@ -182,44 +231,71 @@ class PromptStore:
         )
         if self.config.atomic_writes:
             directory = os.path.dirname(path) or "."
-            tmp = os.path.join(directory, f".{os.path.basename(path)}.tmp.{os.getpid()}")
+            counter_val = next(self._write_counter)
+            tmp = os.path.join(
+                directory,
+                f".{os.path.basename(path)}.tmp.{os.getpid()}.{counter_val}",
+            )
             try:
                 with open(tmp, "w", encoding="utf-8") as f:
                     f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                with open(tmp, encoding="utf-8") as vf:
+                    json.load(vf)
                 os.replace(tmp, path)
-            except Exception:
+                _fsync_directory(directory)
+            except OSError as exc:
+                raise PromptStoreWriteError(
+                    f"failed to write prompt store file {path}: {exc}"
+                ) from exc
+            except Exception as exc:
+                raise PromptStoreWriteError(
+                    f"failed to write prompt store file {path}: {exc}"
+                ) from exc
+            finally:
                 if os.path.exists(tmp):
                     try:
                         os.remove(tmp)
                     except OSError:
                         pass
-                raise
         else:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(payload)
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except OSError as exc:
+                raise PromptStoreWriteError(
+                    f"failed to write prompt store file {path}: {exc}"
+                ) from exc
 
     def _seed_baseline(self) -> None:
         """Seed version 0 from CLASSIFICATION_PROMPT_V0."""
-        text = CLASSIFICATION_PROMPT_V0.text
-        record = asdict(
-            PromptVersionRecord(
-                version=0,
-                text=text,
-                hash=_sha256_hex(text),
-                rules=list(CLASSIFICATION_PROMPT_V0.layers.rules)
-                if CLASSIFICATION_PROMPT_V0.layers
-                else [],
-                source_candidates=[],
-                base_version=None,
-                created_at=datetime.now(UTC).isoformat(),
-                active=True,
-                archived=False,
-                reason="baseline",
+        with self._lock:
+            text = CLASSIFICATION_PROMPT_V0.text
+            record = asdict(
+                PromptVersionRecord(
+                    version=0,
+                    text=text,
+                    hash=_sha256_hex(text),
+                    rules=list(CLASSIFICATION_PROMPT_V0.layers.rules)
+                    if CLASSIFICATION_PROMPT_V0.layers
+                    else [],
+                    source_candidates=[],
+                    base_version=None,
+                    created_at=datetime.now(UTC).isoformat(),
+                    active=True,
+                    archived=False,
+                    reason="baseline",
+                )
             )
-        )
-        self._versions["0"] = record
-        self._flush(self._versions)
-        self._log("save", 0, {"reason": "baseline"})
+            next_versions = dict(self._versions)
+            next_versions["0"] = record
+            _validate_document(next_versions)
+            self._flush(next_versions)
+            self._versions = next_versions
+            self._log("save", 0, {"reason": "baseline"})
 
     def save(
         self,
@@ -228,124 +304,128 @@ class PromptStore:
         base_version: int | None = None,
     ) -> dict[str, Any]:
         """Persist a new prompt version with a store-assigned monotonic number."""
-        if base_version is None:
-            try:
-                base_version = self.get_active()["version"]
-            except PromptStoreError:
-                base_version = None
+        with self._lock:
+            if base_version is None:
+                try:
+                    base_version = self.get_active()["version"]
+                except PromptStoreError:
+                    base_version = None
 
-        record = _normalize_input(prompt_version_dict, reason, base_version)
+            record = _normalize_input(prompt_version_dict, reason, base_version)
 
-        existing = {int(k) for k in self._versions}
-        if existing:
-            new_version = max(existing) + 1
-        else:
-            new_version = 0
-        record["version"] = new_version
+            existing = {int(k) for k in self._versions}
+            if existing:
+                new_version = max(existing) + 1
+            else:
+                new_version = 0
+            record["version"] = new_version
 
-        key = str(new_version)
-        if key in self._versions:
-            raise PromptStoreError(
-                f"version collision: version {new_version} already exists"
-            )
+            key = str(new_version)
+            if key in self._versions:
+                raise PromptStoreError(f"version collision: version {new_version} already exists")
 
-        _validate_record(record)
-        self._versions[key] = record
-        self._flush(self._versions)
-        self._log("save", new_version, {"reason": reason})
-        self.prune()
-        return record
+            _validate_record(record)
+            next_versions = dict(self._versions)
+            next_versions[key] = record
+            _validate_document(next_versions)
+            self._flush(next_versions)
+            self._versions = next_versions
+            self._log("save", new_version, {"reason": reason})
+            self.prune()
+            return record
 
     def get(self, version_number: int) -> dict[str, Any]:
         """Return the full record for *version_number*."""
-        key = str(version_number)
-        if key not in self._versions:
-            raise PromptStoreError(
-                f"version not found: {version_number}"
-            )
-        record = self._versions[key]
-        self._log("get", version_number, {})
-        return record
+        with self._lock:
+            key = str(version_number)
+            if key not in self._versions:
+                raise PromptStoreError(f"version not found: {version_number}")
+            record = self._versions[key]
+            self._log("get", version_number, {})
+            return record
 
     def get_active(self) -> dict[str, Any]:
         """Return the record with active=True."""
-        for record in self._versions.values():
-            if record.get("active"):
-                self._log("get_active", record["version"], {})
-                return record
-        raise PromptStoreError("no active prompt version found in the store")
+        with self._lock:
+            for record in self._versions.values():
+                if record.get("active"):
+                    self._log("get_active", record["version"], {})
+                    return record
+            raise PromptStoreError("no active prompt version found in the store")
 
     def activate(self, version_number: int) -> dict[str, Any]:
         """Mark *version_number* as active, archiving the previous active."""
-        key = str(version_number)
-        if key not in self._versions:
-            raise PromptStoreError(
-                f"cannot activate: version not found: {version_number}"
-            )
+        with self._lock:
+            key = str(version_number)
+            if key not in self._versions:
+                raise PromptStoreError(f"cannot activate: version not found: {version_number}")
 
-        target = self._versions[key]
-        if target.get("active"):
-            self._log("activate", version_number, {"noop": True})
-            return target
+            target = self._versions[key]
+            if target.get("active"):
+                self._log("activate", version_number, {"noop": True})
+                return target
 
-        previous_version: int | None = None
-        for k, rec in self._versions.items():
-            if rec.get("active") and k != key:
-                rec["active"] = False
-                rec["archived"] = True
-                previous_version = rec["version"]
+            next_versions = dict(self._versions)
+            previous_version: int | None = None
+            for k, rec in next_versions.items():
+                if k == key:
+                    next_versions[k] = {**rec, "active": True, "archived": False}
+                elif rec.get("active"):
+                    next_versions[k] = {**rec, "active": False, "archived": True}
+                    previous_version = rec["version"]
 
-        target["active"] = True
-        target["archived"] = False
-        self._flush(self._versions)
-        self._log("activate", version_number, {"previous": previous_version})
-        if previous_version is not None:
-            self._log("archive", previous_version, {"by": version_number})
-        return target
+            self._flush(next_versions)
+            self._versions = next_versions
+            self._log("activate", version_number, {"previous": previous_version})
+            if previous_version is not None:
+                self._log("archive", previous_version, {"by": version_number})
+            return self._versions[key]
 
     def list_versions(self) -> list[dict[str, Any]]:
         """Return metadata dicts sorted by version number, excluding ``text``."""
-        result: list[dict[str, Any]] = []
-        for key in sorted(self._versions, key=lambda k: int(k)):
-            rec = self._versions[key]
-            result.append(
-                {
-                    "version": rec["version"],
-                    "hash": rec["hash"],
-                    "active": rec["active"],
-                    "archived": rec["archived"],
-                    "created_at": rec["created_at"],
-                    "base_version": rec["base_version"],
-                }
-            )
-        self._log("list", None, {"count": len(result)})
-        return result
+        with self._lock:
+            result: list[dict[str, Any]] = []
+            for key in sorted(self._versions, key=lambda k: int(k)):
+                rec = self._versions[key]
+                result.append(
+                    {
+                        "version": rec["version"],
+                        "hash": rec["hash"],
+                        "active": rec["active"],
+                        "archived": rec["archived"],
+                        "created_at": rec["created_at"],
+                        "base_version": rec["base_version"],
+                    }
+                )
+            self._log("list", None, {"count": len(result)})
+            return result
 
     def lineage(self, version_number: int) -> list[dict[str, Any]]:
         """Return the ordered ancestry from oldest ancestor to *version_number*."""
-        chain: list[dict[str, Any]] = []
-        current = version_number
-        visited: set[int] = set()
-        while True:
-            key = str(current)
-            if key not in self._versions:
-                raise PromptStoreError(
-                    f"lineage reconstruction failed: missing ancestor version {current}"
-                )
-            if current in visited:
-                raise PromptStoreError(
-                    f"lineage reconstruction failed: cycle detected at version {current}"
-                )
-            visited.add(current)
-            rec = self._versions[key]
-            chain.append(rec)
-            base = rec.get("base_version")
-            if base is None:
-                break
-            current = int(base)
-        chain.reverse()
-        self._log("lineage", version_number, {"length": len(chain)})
-        return chain
+        with self._lock:
+            chain: list[dict[str, Any]] = []
+            current = version_number
+            visited: set[int] = set()
+            while True:
+                key = str(current)
+                if key not in self._versions:
+                    raise PromptStoreError(
+                        f"lineage reconstruction failed: missing ancestor version {current}"
+                    )
+                if current in visited:
+                    raise PromptStoreError(
+                        f"lineage reconstruction failed: cycle detected at version {current}"
+                    )
+                visited.add(current)
+                rec = self._versions[key]
+                chain.append(rec)
+                base = rec.get("base_version")
+                if base is None:
+                    break
+                current = int(base)
+            chain.reverse()
+            self._log("lineage", version_number, {"length": len(chain)})
+            return chain
 
     def _protected_versions(self) -> set[int]:
         """Return the active version plus all its ancestors."""
@@ -360,43 +440,43 @@ class PromptStore:
 
     def prune(self) -> list[int]:
         """Delete oldest archived versions not in the protected set."""
-        if self.config.max_versions is None:
-            return []
-        protected = self._protected_versions()
-        deleted: list[int] = []
-        while len(self._versions) > self.config.max_versions:
-            candidates = sorted(
-                (
-                    int(k)
-                    for k, rec in self._versions.items()
-                    if rec.get("archived") and int(k) not in protected
-                ),
-            )
-            if not candidates:
-                break
-            victim = candidates[0]
-            del self._versions[str(victim)]
-            deleted.append(victim)
-            self._log("prune", victim, {})
-        if deleted:
-            self._flush(self._versions)
-        return deleted
+        with self._lock:
+            if self.config.max_versions is None:
+                return []
+            protected = self._protected_versions()
+            next_versions = dict(self._versions)
+            deleted: list[int] = []
+            while len(next_versions) > self.config.max_versions:
+                candidates = sorted(
+                    (
+                        int(k)
+                        for k, rec in next_versions.items()
+                        if rec.get("archived") and int(k) not in protected
+                    ),
+                )
+                if not candidates:
+                    break
+                victim = candidates[0]
+                del next_versions[str(victim)]
+                deleted.append(victim)
+                self._log("prune", victim, {})
+            if deleted:
+                self._flush(next_versions)
+                self._versions = next_versions
+            return deleted
 
-    def _set_field(
-        self, version_number: int, field_name: str, value: Any
-    ) -> None:
+    def _set_field(self, version_number: int, field_name: str, value: Any) -> None:
         """Set a single field on a record, enforcing the mutable allowlist."""
-        if field_name not in MUTABLE_FIELDS:
-            raise PromptStoreError(
-                f"cannot modify immutable field: {field_name}"
-            )
-        key = str(version_number)
-        if key not in self._versions:
-            raise PromptStoreError(
-                f"version not found: {version_number}"
-            )
-        self._versions[key][field_name] = value
-        self._flush(self._versions)
+        with self._lock:
+            if field_name not in MUTABLE_FIELDS:
+                raise PromptStoreError(f"cannot modify immutable field: {field_name}")
+            key = str(version_number)
+            if key not in self._versions:
+                raise PromptStoreError(f"version not found: {version_number}")
+            next_versions = dict(self._versions)
+            next_versions[key] = {**self._versions[key], field_name: value}
+            self._flush(next_versions)
+            self._versions = next_versions
 
     def _log(
         self,
