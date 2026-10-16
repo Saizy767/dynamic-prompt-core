@@ -79,9 +79,10 @@ def load_results(path: str) -> list[dict[str, Any]]:
     """Load and schema-validate a results_*.jsonl artifact.
 
     Raises MetricsError naming the first offending record's id and the missing
-    field when a record does not conform.
+    field when a record does not conform.  Raises MetricsError on duplicate ids.
     """
     rows: list[dict[str, Any]] = []
+    seen_ids: set[Any] = set()
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -89,6 +90,10 @@ def load_results(path: str) -> list[dict[str, Any]]:
                 continue
             row = json.loads(line)
             _validate_row(row)
+            rid = row["id"]
+            if rid in seen_ids:
+                raise MetricsError(f"duplicate id={rid!r} found in results artifact")
+            seen_ids.add(rid)
             rows.append(row)
     return rows
 
@@ -96,8 +101,25 @@ def load_results(path: str) -> list[dict[str, Any]]:
 def _validate_row(row: dict[str, Any]) -> None:
     rid = row.get("id")
     for fname in REQUIRED_FIELDS:
+        if fname == "predicted_decision":
+            continue
         if fname not in row or row[fname] is None:
             raise MetricsError(f"record id={rid!r} is missing required field '{fname}'")
+
+    tl = row["true_label"]
+    if not isinstance(tl, int) or isinstance(tl, bool) or tl not in (0, 1):
+        raise MetricsError(f"record id={rid!r} has invalid true_label={tl!r} (expected int 0 or 1)")
+
+    if row["classify_status"] == "ok":
+        pd = row.get("predicted_decision")
+        if pd is None:
+            raise MetricsError(
+                f"record id={rid!r} with classify_status='ok' is missing predicted_decision"
+            )
+        if not isinstance(pd, int) or isinstance(pd, bool) or pd not in (0, 1):
+            raise MetricsError(
+                f"record id={rid!r} has invalid predicted_decision={pd!r} (expected int 0 or 1)"
+            )
 
 
 def parse_artifact_name(path: str) -> dict[str, str]:
@@ -302,7 +324,54 @@ def compute_metrics(
     name_parts = parse_artifact_name(source_artifact)
     ok_rows, parse_counts = _filter_ok(rows)
 
+    total = len(rows)
+    ok_count = len(ok_rows)
+    has_failures = ok_count < total
+
+    counts = {
+        "total": total,
+        "ok": parse_counts.get("ok", 0),
+        "failed": parse_counts.get("failed", 0),
+        "repaired": parse_counts.get("repaired", 0),
+        "not_attempted": parse_counts.get("not_attempted", 0),
+    }
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+    result: dict[str, Any] = {
+        "run_id": name_parts["run_id"],
+        "prompt_version": name_parts["prompt_version"],
+        "split": name_parts["split"],
+        "timestamp": timestamp,
+        "source_artifact": os.path.basename(source_artifact),
+        "counts": counts,
+        "metrics_available": ok_count > 0,
+        "denominator": {"ok_count": ok_count, "total_count": total},
+        "denominator_excludes_failures": has_failures,
+        "comparison": None,
+    }
+
+    if not ok_rows:
+        result.update(
+            {
+                "accuracy": None,
+                "accuracy_over_total": None,
+                "precision": None,
+                "recall": None,
+                "f1": None,
+                "minority_class": None,
+                "confusion_matrix": None,
+                "prediction_distribution": None,
+                "true_distribution": None,
+                "bias": None,
+                "groups": None,
+            }
+        )
+        return result
+
     accuracy = _compute_accuracy(ok_rows)
+    correct = sum(1 for r in ok_rows if r["predicted_decision"] == r["true_label"])
+    accuracy_over_total = correct / total if total > 0 else None
     precision, recall, f1, macro_f1, weighted_f1 = _compute_prf(ok_rows)
     confusion = _compute_confusion_matrix(ok_rows)
     minority = _minority_class(ok_rows)
@@ -312,41 +381,30 @@ def compute_metrics(
     bias = _bias_detection(pred_dist, true_dist, config.bias_threshold)
     groups = _group_breakdown(ok_rows, config)
 
-    counts = {
-        "total": len(rows),
-        "ok": parse_counts.get("ok", 0),
-        "failed": parse_counts.get("failed", 0),
-        "repaired": parse_counts.get("repaired", 0),
-        "not_attempted": parse_counts.get("not_attempted", 0),
-    }
-
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-
-    return {
-        "run_id": name_parts["run_id"],
-        "prompt_version": name_parts["prompt_version"],
-        "split": name_parts["split"],
-        "timestamp": timestamp,
-        "source_artifact": os.path.basename(source_artifact),
-        "counts": counts,
-        "accuracy": float(accuracy),
-        "precision": precision,
-        "recall": recall,
-        "f1": {
-            "0": f1["0"],
-            "1": f1["1"],
-            "macro": macro_f1,
-            "weighted": weighted_f1,
-            "minority": minority_f1,
-        },
-        "minority_class": minority,
-        "confusion_matrix": confusion,
-        "prediction_distribution": pred_dist,
-        "true_distribution": true_dist,
-        "bias": bias,
-        "groups": groups,
-        "comparison": None,
-    }
+    result.update(
+        {
+            "accuracy": float(accuracy),
+            "accuracy_over_total": float(accuracy_over_total)
+            if accuracy_over_total is not None
+            else None,
+            "precision": precision,
+            "recall": recall,
+            "f1": {
+                "0": f1["0"],
+                "1": f1["1"],
+                "macro": macro_f1,
+                "weighted": weighted_f1,
+                "minority": minority_f1,
+            },
+            "minority_class": minority,
+            "confusion_matrix": confusion,
+            "prediction_distribution": pred_dist,
+            "true_distribution": true_dist,
+            "bias": bias,
+            "groups": groups,
+        }
+    )
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -399,6 +457,33 @@ def compare_versions(
 
     metrics0 = compute_metrics(rows0, config, results_path_v0)
     metrics1 = compute_metrics(rows1, config, results_path_v1)
+
+    if not metrics0["metrics_available"] or not metrics1["metrics_available"]:
+        return {
+            "v0": {
+                "run_id": parts0["run_id"],
+                "prompt_version": parts0["prompt_version"],
+                "split": parts0["split"],
+                "metrics_available": metrics0["metrics_available"],
+            },
+            "v1": {
+                "run_id": parts1["run_id"],
+                "prompt_version": parts1["prompt_version"],
+                "split": parts1["split"],
+                "metrics_available": metrics1["metrics_available"],
+            },
+            "deltas": {
+                "accuracy": None,
+                "macro_f1": None,
+                "minority_f1": None,
+            },
+            "changed": [],
+            "overlap": {
+                "common": 0,
+                "only_v0": 0,
+                "only_v1": 0,
+            },
+        }
 
     deltas = {
         "accuracy": metrics1["accuracy"] - metrics0["accuracy"],
@@ -478,7 +563,14 @@ def _print_summary(metrics: dict[str, Any]) -> None:
     print(f"  failed         : {c['failed']}")
     print(f"  repaired       : {c['repaired']}")
     print(f"  not_attempted  : {c['not_attempted']}")
+
+    if not metrics.get("metrics_available", True):
+        print("  metrics unavailable (no ok records)")
+        print("=" * 60)
+        return
+
     print(f"  accuracy       : {metrics['accuracy']:.4f}")
+    print(f"  accuracy/total : {metrics['accuracy_over_total']:.4f}")
     print(f"  macro-F1       : {metrics['f1']['macro']:.4f}")
     print(
         f"  minority-F1    : {metrics['f1']['minority']:.4f}  (class {metrics['minority_class']})"
@@ -506,6 +598,14 @@ def _cmd_compare(args: argparse.Namespace) -> None:
         f"v1={result['v1']['prompt_version']}, split={result['v0']['split']})"
     )
     print("=" * 60)
+
+    if d["accuracy"] is None:
+        v0_avail = result["v0"].get("metrics_available", True)
+        v1_avail = result["v1"].get("metrics_available", True)
+        print(f"  metrics unavailable (v0={v0_avail}, v1={v1_avail})")
+        print("=" * 60)
+        return
+
     print(f"  Δ accuracy     : {d['accuracy']:+.4f}")
     print(f"  Δ macro-F1     : {d['macro_f1']:+.4f}")
     print(f"  Δ minority-F1  : {d['minority_f1']:+.4f}")
