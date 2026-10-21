@@ -27,6 +27,8 @@ from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
     BatchTokenization,
 )
 
+_DEFAULT_RULES = ["rule a", "rule b", "rule c"]
+
 VOCAB_SIZE = 4
 
 
@@ -46,6 +48,7 @@ class _BlockingModel:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: object,
     ) -> BatchedLogits:
         self._block_event.wait()
         uniform = [1.0 / VOCAB_SIZE] * VOCAB_SIZE
@@ -114,7 +117,7 @@ async def test_scorer_does_not_block_event_loop() -> None:
         await asyncio.sleep(0.01)
         concurrent_progress = True
 
-    scoring_task = asyncio.create_task(scorer.score("text", candidates))
+    scoring_task = asyncio.create_task(scorer.score("text", candidates, _DEFAULT_RULES))
     progress_task = asyncio.create_task(_concurrent_task())
 
     await asyncio.sleep(0.05)

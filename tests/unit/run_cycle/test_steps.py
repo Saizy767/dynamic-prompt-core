@@ -161,7 +161,34 @@ def test_run_active_on_dev_threads_scorer_policy_candidates(build_mock_deps):
     assert list(deps.candidates) == captured["candidates"]
 
 
-def test_run_new_on_dev_threads_scorer_policy_candidates(build_mock_deps):
+def test_run_active_on_dev_passes_active_prompt_with_rules(build_mock_deps):
+    """run_active_on_dev passes state.active_version as classify_prompt so the
+    runner can extract rules from it."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
+        run_active_on_dev,
+    )
+
+    deps = build_mock_deps()
+    state = CycleState(run_id="test-run")
+    config = CycleConfig(max_cycles=1, run_id="test-run")
+
+    captured: dict = {}
+
+    class _CapturingRunner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            return [], "fake.jsonl"
+
+    with (
+        patch(f"{STEPS}.BaselineRunner", _CapturingRunner),
+        patch(f"{STEPS}.RunnerConfig.from_config", return_value=MagicMock()),
+    ):
+        asyncio.run(run_active_on_dev(state, deps, config, "config.toml"))
+
+    assert captured["classify_prompt"] is state.active_version
     """run_new_on_dev passes scorer, policy, and candidates from deps to BaselineRunner."""
     from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
     from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
@@ -337,6 +364,14 @@ def _make_prompt_with_rules(version: str, rules: list[str]):
     return PromptArtifact(version=version, layers=layers, text=render(layers))
 
 
+def _v0_rules() -> list[str]:
+    """Return the default V0 classification rules."""
+    from dynamic_prompt_core.domain.prompts import CLASSIFICATION_PROMPT_V0
+
+    layers = CLASSIFICATION_PROMPT_V0.layers
+    return list(layers.rules) if layers else []
+
+
 def test_run_round_accumulates_rules_on_accept(
     build_mock_deps,
     cycle_config,
@@ -354,8 +389,8 @@ def test_run_round_accumulates_rules_on_accept(
     mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
     metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
 
-    prompt_v1 = _make_prompt_with_rules("classify-v1", ["rule-1"])
-    prompt_v2 = _make_prompt_with_rules("classify-v2", ["rule-1", "rule-2"])
+    prompt_v1 = _make_prompt_with_rules("classify-v1", _v0_rules() + ["rule-1"])
+    prompt_v2 = _make_prompt_with_rules("classify-v2", _v0_rules() + ["rule-1", "rule-2"])
 
     mock_pc_config = MagicMock(max_rules=10)
 
@@ -426,8 +461,8 @@ def test_run_round_stops_on_degradation(
     mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
     metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
 
-    prompt_v1 = _make_prompt_with_rules("classify-v1", ["rule-1"])
-    prompt_v2 = _make_prompt_with_rules("classify-v2", ["rule-1", "rule-2"])
+    prompt_v1 = _make_prompt_with_rules("classify-v1", _v0_rules() + ["rule-1"])
+    prompt_v2 = _make_prompt_with_rules("classify-v2", _v0_rules() + ["rule-1", "rule-2"])
 
     mock_pc_config = MagicMock(max_rules=10)
 
@@ -501,7 +536,7 @@ def test_run_round_no_acceptance_increments_rollback(
     mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
     metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
 
-    prompt_v1 = _make_prompt_with_rules("classify-v1", ["rule-1"])
+    prompt_v1 = _make_prompt_with_rules("classify-v1", _v0_rules() + ["rule-1"])
 
     mock_pc_config = MagicMock(max_rules=10)
 

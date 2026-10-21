@@ -18,6 +18,8 @@ import inspect
 import logging
 import math
 import time
+from collections.abc import Sequence
+from typing import Any
 
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate
@@ -101,8 +103,12 @@ class LLMLogitCandidateScorer:
         self,
         text: str,
         candidates: list[Candidate],
+        rules: Sequence[str],
     ) -> list[Judgment]:
         """Evaluate candidates against ``text`` using model logits.
+
+        ``rules`` are the active classification rules forwarded to the prompt
+        builder.
 
         Returns exactly one ``Judgment`` per candidate in input order.
         Raises ``CandidateScoringError`` if any candidate cannot be evaluated.
@@ -119,13 +125,14 @@ class LLMLogitCandidateScorer:
         try:
             t_total = time.perf_counter()
             log.info(
-                "CandidateScorer.score: START text=%d chars, %d candidates",
+                "CandidateScorer.score: START text=%d chars, %d candidates, %d rules",
                 len(text),
                 len(candidates),
+                len(rules),
             )
 
             t0 = time.perf_counter()
-            prefix = self._prompt_builder.build_prefix(text)
+            prefix = self._prompt_builder.build_prefix(text, rules)
             candidate_texts = [self._prompt_builder.build_candidate(c) for c in candidates]
             prefixes = [prefix] * len(candidates)
             t_prompt = time.perf_counter() - t0
@@ -140,13 +147,20 @@ class LLMLogitCandidateScorer:
 
             t0 = time.perf_counter()
             forward_fn = self._model.forward_batch
+            forward_kwargs: dict[str, Any] = {
+                "prefix_token_counts": batch.prefix_token_counts,
+                "candidate_token_ids": batch.candidate_token_ids,
+            }
             if inspect.iscoroutinefunction(forward_fn):
-                batched_logits = await forward_fn(batch.input_ids, batch.attention_mask)
+                batched_logits = await forward_fn(
+                    batch.input_ids, batch.attention_mask, **forward_kwargs,
+                )
             else:
                 batched_logits = await asyncio.to_thread(
                     forward_fn,
                     batch.input_ids,
                     batch.attention_mask,
+                    **forward_kwargs,
                 )
             t_forward = time.perf_counter() - t0
 
@@ -169,6 +183,24 @@ class LLMLogitCandidateScorer:
                     candidate.value,
                     score,
                 )
+
+            if len(scores) >= 2:
+                max_score = max(scores)
+                min_score = min(scores)
+                if max_score == min_score:
+                    log.warning(
+                        "CandidateScorer: all %d raw scores are equal "
+                        "(value=%.6f); softmax will produce uniform "
+                        "probabilities — this may indicate missing "
+                        "token_logprobs or a degenerate model response",
+                        len(scores),
+                        max_score,
+                    )
+
+            log.info(
+                "CandidateScorer: raw scores before softmax: %s",
+                [f"{c.value}={s:.6f}" for c, s in zip(candidates, scores, strict=True)],
+            )
 
             probabilities = _softmax(scores)
 

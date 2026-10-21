@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import typing
+from collections.abc import Sequence
 
 import pytest
 
 from dynamic_prompt_core.domain.models.candidate import Candidate
+from dynamic_prompt_core.domain.prompts import CLASSIFICATION_PROMPT_V0
 from dynamic_prompt_core.infrastructure.llm.scoring.errors import LLMScoringError
 from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
     CausalLanguageModel,
@@ -18,17 +20,19 @@ from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
     TokenizerAdapter,
 )
 
+_DEFAULT_RULES: Sequence[str] = ["rule a", "rule b", "rule c"]
+
 
 class TestScoringPromptBuilder:
     def setup_method(self) -> None:
         self.builder = ScoringPromptBuilder()
 
     def test_prefix_ends_with_candidate_label(self) -> None:
-        prefix = self.builder.build_prefix("some input")
+        prefix = self.builder.build_prefix("some input", _DEFAULT_RULES)
         assert prefix.endswith("Candidate: ")
 
     def test_prefix_contains_input(self) -> None:
-        prefix = self.builder.build_prefix("some input")
+        prefix = self.builder.build_prefix("some input", _DEFAULT_RULES)
         assert "some input" in prefix
 
     def test_candidate_value_verbatim(self) -> None:
@@ -42,124 +46,192 @@ class TestScoringPromptBuilder:
 
     def test_full_prompt_is_prefix_plus_candidate(self) -> None:
         candidate = Candidate("sports")
-        full = self.builder.build("input text", candidate)
-        assert full == self.builder.build_prefix("input text") + "sports"
+        full = self.builder.build("input text", candidate, _DEFAULT_RULES)
+        assert full == self.builder.build_prefix("input text", _DEFAULT_RULES) + "sports"
 
     def test_prefix_contains_semantic_criteria(self) -> None:
-        prefix = self.builder.build_prefix("some input")
+        prefix = self.builder.build_prefix("some input", _DEFAULT_RULES)
         assert "Evaluate how well the candidate" in prefix
 
-    def test_prefix_contains_relevance_criteria(self) -> None:
-        prefix = self.builder.build_prefix("some input")
-        assert "content of the text" in prefix
-
     def test_no_json_instruction_in_prefix(self) -> None:
-        prefix = self.builder.build_prefix("some input")
+        prefix = self.builder.build_prefix("some input", _DEFAULT_RULES)
         assert "JSON" not in prefix
 
     def test_no_confidence_instruction_in_prefix(self) -> None:
-        prefix = self.builder.build_prefix("some input")
+        prefix = self.builder.build_prefix("some input", _DEFAULT_RULES)
         assert "confidence" not in prefix
 
     def test_no_decision_instruction_in_prefix(self) -> None:
-        prefix = self.builder.build_prefix("some input")
+        prefix = self.builder.build_prefix("some input", _DEFAULT_RULES)
         assert "decision" not in prefix
 
     def test_no_reply_with_instruction_in_prefix(self) -> None:
-        prefix = self.builder.build_prefix("some input")
+        prefix = self.builder.build_prefix("some input", _DEFAULT_RULES)
         assert "Reply with" not in prefix
 
     def test_no_json_instruction_in_full_prompt(self) -> None:
-        full = self.builder.build("input text", Candidate("sports"))
+        full = self.builder.build("input text", Candidate("sports"), _DEFAULT_RULES)
         assert "JSON" not in full
 
     def test_no_confidence_instruction_in_full_prompt(self) -> None:
-        full = self.builder.build("input text", Candidate("sports"))
+        full = self.builder.build("input text", Candidate("sports"), _DEFAULT_RULES)
         assert "confidence" not in full
 
     def test_no_decision_instruction_in_full_prompt(self) -> None:
-        full = self.builder.build("input text", Candidate("sports"))
+        full = self.builder.build("input text", Candidate("sports"), _DEFAULT_RULES)
         assert "decision" not in full
 
     def test_no_reply_with_instruction_in_full_prompt(self) -> None:
-        full = self.builder.build("input text", Candidate("sports"))
+        full = self.builder.build("input text", Candidate("sports"), _DEFAULT_RULES)
         assert "Reply with" not in full
 
     def test_candidate_with_spaces_preserved_in_build(self) -> None:
-        full = self.builder.build("input text", Candidate("  sports  "))
+        full = self.builder.build("input text", Candidate("  sports  "), _DEFAULT_RULES)
         assert full.endswith("  sports  ")
 
     def test_candidate_with_mixed_case_preserved_in_build(self) -> None:
-        full = self.builder.build("input text", Candidate("Sports"))
+        full = self.builder.build("input text", Candidate("Sports"), _DEFAULT_RULES)
         assert full.endswith("Sports")
 
     def test_candidate_with_punctuation_preserved_in_build(self) -> None:
-        full = self.builder.build("input text", Candidate("billing / payments"))
+        full = self.builder.build("input text", Candidate("billing / payments"), _DEFAULT_RULES)
         assert full.endswith("billing / payments")
 
     def test_candidate_with_unicode_preserved_in_build(self) -> None:
-        full = self.builder.build("input text", Candidate("分类"))
+        full = self.builder.build("input text", Candidate("分类"), _DEFAULT_RULES)
         assert full.endswith("分类")
 
     def test_prefix_candidate_boundary_maintained(self) -> None:
         candidate = Candidate("sports")
         text = "input text"
-        full = self.builder.build(text, candidate)
-        assert full == self.builder.build_prefix(text) + self.builder.build_candidate(candidate)
+        full = self.builder.build(text, candidate, _DEFAULT_RULES)
+        assert (
+            full
+            == self.builder.build_prefix(text, _DEFAULT_RULES)
+            + self.builder.build_candidate(candidate)
+        )
 
     def test_candidate_is_final_textual_component(self) -> None:
         candidate = Candidate("sports")
-        full = self.builder.build("input text", candidate)
+        full = self.builder.build("input text", candidate, _DEFAULT_RULES)
         assert full.endswith("sports")
-        prefix = self.builder.build_prefix("input text")
+        prefix = self.builder.build_prefix("input text", _DEFAULT_RULES)
         assert prefix.endswith("Candidate: ")
         assert full == prefix + "sports"
 
 
-class TestJudgmentPromptSemantics:
-    """Verify semantic requirements from CLASSIFICATION_PROMPT_V0 are represented."""
+class TestScoringPromptBuilderRules:
+    """Unit tests for active-rule incorporation in ScoringPromptBuilder."""
 
     def setup_method(self) -> None:
         self.builder = ScoringPromptBuilder()
 
+    def test_all_supplied_rules_appear_in_prompt(self) -> None:
+        rules = ["first rule", "second rule", "third rule"]
+        prefix = self.builder.build_prefix("text", rules)
+        for rule in rules:
+            assert rule in prefix
+
+    def test_rule_order_preserved(self) -> None:
+        rules = ["alpha", "beta", "gamma"]
+        prefix = self.builder.build_prefix("text", rules)
+        pos_alpha = prefix.index("alpha")
+        pos_beta = prefix.index("beta")
+        pos_gamma = prefix.index("gamma")
+        assert pos_alpha < pos_beta < pos_gamma
+
+    def test_rules_appear_before_input_text_and_candidate(self) -> None:
+        rules = ["my rule"]
+        text = "zzz_unique_input_zzz"
+        candidate = Candidate("zzz_unique_candidate_zzz")
+        full = self.builder.build(text, candidate, rules)
+        pos_rule = full.index("my rule")
+        pos_text = full.index(text)
+        pos_candidate = full.index(candidate.value)
+        assert pos_rule < pos_text < pos_candidate
+
+    def test_rules_appear_after_fixed_instructions(self) -> None:
+        rules = ["my rule"]
+        prefix = self.builder.build_prefix("text", rules)
+        pos_instructions = prefix.index("Evaluate how well the candidate")
+        pos_rule = prefix.index("my rule")
+        assert pos_instructions < pos_rule
+
+    def test_unicode_rules_handled(self) -> None:
+        rules = ["правило один", "規則二", "分类规则"]
+        prefix = self.builder.build_prefix("text", rules)
+        for rule in rules:
+            assert rule in prefix
+
+    def test_multiline_rules_handled(self) -> None:
+        rules = ["first line\nsecond line", "another rule"]
+        prefix = self.builder.build_prefix("text", rules)
+        assert "first line\nsecond line" in prefix
+        assert "another rule" in prefix
+
+    def test_empty_rules_do_not_produce_default_rules(self) -> None:
+        prefix_empty = self.builder.build_prefix("text", [])
+        prefix_with_rules = self.builder.build_prefix("text", ["some rule"])
+        assert "Classification rules:" not in prefix_empty
+        assert "some rule" not in prefix_empty
+        assert "Classification rules:" in prefix_with_rules
+
+    def test_identical_inputs_produce_identical_output(self) -> None:
+        rules = ["rule a", "rule b"]
+        text = "same text"
+        prefix1 = self.builder.build_prefix(text, rules)
+        prefix2 = self.builder.build_prefix(text, rules)
+        assert prefix1 == prefix2
+
+    def test_different_rules_produce_different_prompts(self) -> None:
+        prefix_a = self.builder.build_prefix("text", ["rule a"])
+        prefix_b = self.builder.build_prefix("text", ["rule b"])
+        assert prefix_a != prefix_b
+
+    def test_rules_formatted_as_bullets(self) -> None:
+        rules = ["rule one", "rule two"]
+        prefix = self.builder.build_prefix("text", rules)
+        assert "- rule one" in prefix
+        assert "- rule two" in prefix
+
+
+class TestJudgmentPromptSemantics:
+    """Verify the scoring prompt structure with active rules."""
+
+    def setup_method(self) -> None:
+        self.builder = ScoringPromptBuilder()
+        layers = CLASSIFICATION_PROMPT_V0.layers
+        self.rules = list(layers.rules) if layers else []
+
     def test_prompt_contains_task_framing_for_candidate_evaluation(self) -> None:
-        prefix = self.builder.build_prefix("some input")
+        prefix = self.builder.build_prefix("some input", self.rules)
         assert "evaluate" in prefix.lower()
         assert "candidate" in prefix.lower()
         assert "matches" in prefix.lower()
 
-    def test_prompt_contains_relevance_criteria_based_on_content(self) -> None:
-        prefix = self.builder.build_prefix("some input")
-        assert "content of the text" in prefix
-        assert "hashtags" in prefix
-
-    def test_prompt_contains_metaphorical_handling(self) -> None:
-        prefix = self.builder.build_prefix("some input")
-        assert "metaphorically" in prefix
-
-    def test_prompt_contains_ambiguity_handling(self) -> None:
-        prefix = self.builder.build_prefix("some input")
-        assert "ambiguous" in prefix
-
-    def test_prompt_contains_factual_match_criteria(self) -> None:
-        prefix = self.builder.build_prefix("some input")
-        assert "Factual statements" in prefix
+    def test_prompt_contains_active_rules(self) -> None:
+        prefix = self.builder.build_prefix("some input", self.rules)
+        for rule in self.rules:
+            assert rule in prefix
 
     def test_no_json_output_phrase(self) -> None:
-        full = self.builder.build("input text", Candidate("sports"))
+        full = self.builder.build("input text", Candidate("sports"), self.rules)
         assert "Reply with a single JSON object" not in full
 
-    def test_no_decision_field(self) -> None:
-        full = self.builder.build("input text", Candidate("sports"))
-        assert "decision" not in full
-
-    def test_no_confidence_field(self) -> None:
-        full = self.builder.build("input text", Candidate("sports"))
-        assert "confidence" not in full
+    def test_no_json_field_descriptions(self) -> None:
+        full = self.builder.build("input text", Candidate("sports"), self.rules)
+        assert '"decision" (integer 0 or 1)' not in full
+        assert '"confidence" (integer 0-100)' not in full
 
     def test_no_no_markdown_phrase(self) -> None:
-        full = self.builder.build("input text", Candidate("sports"))
-        assert "No markdown" not in full
+        full = self.builder.build("input text", Candidate("sports"), self.rules)
+        assert "No markdown, no extra text" not in full
+
+    def test_default_prompt_rules_produce_expected_structure(self) -> None:
+        prefix = self.builder.build_prefix("some input", self.rules)
+        assert "Classification rules:" in prefix
+        for rule in self.rules:
+            assert f"- {rule}" in prefix
 
     def test_candidate_specific_prompts_are_distinct(self) -> None:
         text = "The user wants to cancel their subscription."
@@ -168,13 +240,13 @@ class TestJudgmentPromptSemantics:
             Candidate("password reset"),
             Candidate("billing inquiry"),
         ]
-        prompts = [self.builder.build(text, c) for c in candidates]
+        prompts = [self.builder.build(text, c, self.rules) for c in candidates]
         assert len(set(prompts)) == 3
 
     def test_each_prompt_contains_exactly_one_candidate(self) -> None:
         text = "The user wants to cancel their subscription."
         candidates = [Candidate("alpha"), Candidate("beta"), Candidate("gamma")]
-        prompts = [self.builder.build(text, c) for c in candidates]
+        prompts = [self.builder.build(text, c, self.rules) for c in candidates]
         for i, prompt in enumerate(prompts):
             assert candidates[i].value in prompt
             for j, other in enumerate(candidates):

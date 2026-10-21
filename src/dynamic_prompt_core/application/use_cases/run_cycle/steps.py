@@ -181,14 +181,25 @@ async def compose_new_version(
     deps: RunCycleDeps,
     run_id: str,
     version_str: str | None = None,
+    thesis_bank_path: str | None = None,
 ) -> tuple[PromptArtifact, str, list[int]]:
     """Compose a new prompt version from a candidate and the active base layers.
 
     Returns ``(new_prompt, artifact_path, source_candidates)``.
+
+    ``thesis_bank_path`` is the path to the thesis-bank dump artifact produced
+    by ``update_thesis_collection``.  It supplies cluster centroids for the
+    semantic distortion check.  When ``None``, the distortion check is skipped
+    for every rule and a warning is logged.
     """
     pc_config = PromptComposerConfig.from_config(config_path)
     base_layers = load_base_layers(active_prompt)
-    centroids = load_centroids(None)
+    if thesis_bank_path is None:
+        log.warning(
+            "compose_new_version: thesis_bank_path is None — "
+            "distortion check will be skipped for all rules"
+        )
+    centroids = load_centroids(thesis_bank_path)
     candidates_list = [candidate]
     existing_rules = list(active_prompt.layers.rules) if active_prompt.layers else []
     new_artifact, rules_with_lineage, counters, rejected = await compose(
@@ -394,6 +405,15 @@ async def run_cycle_step(
 
     # Step 2: Compute dev metrics for active (logging only)
     metrics_dev_active = compute_dev_metrics(active_dev_path, config_path)
+    _dev_summary = _extract_metric_summary(metrics_dev_active)
+    log.info(
+        "cycle %d active dev metrics: version=%s accuracy=%.4f macro_f1=%.4f minority_f1=%.4f",
+        cycle_number,
+        active_version_at_start,
+        _dev_summary["accuracy"],
+        _dev_summary["macro_f1"],
+        _dev_summary["minority_f1"],
+    )
 
     # Optional teacher refinement (between step 1 and step 3)
     refined_path: str | None = None
@@ -434,6 +454,18 @@ async def run_cycle_step(
     except Exception as exc:
         log.warning("active holdout evaluation failed: %s", exc)
 
+    if metrics_holdout_active:
+        _hold_summary = _extract_metric_summary(metrics_holdout_active)
+        log.info(
+            "cycle %d active holdout metrics: version=%s accuracy=%.4f "
+            "macro_f1=%.4f minority_f1=%.4f",
+            cycle_number,
+            active_version_at_start,
+            _hold_summary["accuracy"],
+            _hold_summary["macro_f1"],
+            _hold_summary["minority_f1"],
+        )
+
     # Steps 6–7: Greedy incremental rule accumulation (holdout only)
     best_prompt = state.active_version
     best_artifact_path = state.active_version_path
@@ -467,8 +499,23 @@ async def run_cycle_step(
             deps,
             state.run_id,
             version_str=version_str,
+            thesis_bank_path=state.thesis_bank_path,
         )
         new_version = new_prompt.version
+
+        old_rules = list(best_prompt.layers.rules) if best_prompt.layers else []
+        new_rules = list(new_prompt.layers.rules) if new_prompt.layers else []
+
+        if len(new_rules) <= len(old_rules):
+            log.warning(
+                "candidate cluster_id=%s did not add a rule; "
+                "version=%s has %d rules, previous=%d; skipping evaluation",
+                candidate.get("cluster_id"),
+                new_prompt.version,
+                len(new_rules),
+                len(old_rules),
+            )
+            continue
 
         # Run vN_k on holdout only (no dev run per candidate)
         holdout_metrics_new: dict[str, Any] = {}
@@ -488,6 +535,24 @@ async def run_cycle_step(
         # Step 7: Decide by holdout (strict improvement)
         vc_config = VersionComparatorConfig.from_config(config_path)
         decision, reason = decide(holdout_metrics_new, best_holdout_metrics, vc_config)
+
+        new_summary = _extract_metric_summary(holdout_metrics_new)
+        best_summary = _extract_metric_summary(best_holdout_metrics)
+        log.info(
+            "cycle %d holdout decision: version=%s cluster_id=%s decision=%s "
+            "new(accuracy=%.4f macro_f1=%.4f minority_f1=%.4f) "
+            "best(accuracy=%.4f macro_f1=%.4f minority_f1=%.4f)",
+            cycle_number,
+            new_version,
+            candidate.get("cluster_id"),
+            decision,
+            new_summary["accuracy"],
+            new_summary["macro_f1"],
+            new_summary["minority_f1"],
+            best_summary["accuracy"],
+            best_summary["macro_f1"],
+            best_summary["minority_f1"],
+        )
 
         attempts.append(
             {

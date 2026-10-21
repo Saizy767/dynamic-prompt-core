@@ -1,6 +1,8 @@
 """Integration tests for the end-to-end candidate-scoring classification path."""
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from dynamic_prompt_core.application.services.classification_policy import (
     ArgmaxClassificationPolicy,
 )
@@ -10,6 +12,8 @@ from dynamic_prompt_core.application.use_cases.classify_input import (
 )
 from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.judgment import Judgment
+
+_DEFAULT_RULES: Sequence[str] = ["rule a", "rule b", "rule c"]
 
 
 class _FakeScorer:
@@ -22,6 +26,7 @@ class _FakeScorer:
         self,
         text: str,
         candidates: list[Candidate],
+        rules: Sequence[str],
     ) -> list[Judgment]:
         return list(self._judgments)
 
@@ -38,7 +43,7 @@ class TestEndToEndClassificationPath:
         ])
         deps = ClassifyInputDeps(scorer=scorer, policy=ArgmaxClassificationPolicy())
 
-        result = await classify_input(deps, "example input", candidates)
+        result = await classify_input(deps, "example input", candidates, _DEFAULT_RULES)
 
         assert result.selected == Candidate("1")
 
@@ -55,7 +60,7 @@ class TestEndToEndClassificationPath:
         ])
         deps = ClassifyInputDeps(scorer=scorer, policy=ArgmaxClassificationPolicy())
 
-        result = await classify_input(deps, "example input", candidates)
+        result = await classify_input(deps, "example input", candidates, _DEFAULT_RULES)
 
         assert result.selected == Candidate("1")
         assert all(isinstance(j, Judgment) for j in result.judgments)
@@ -71,7 +76,7 @@ class TestEndToEndClassificationPath:
         ])
         deps = ClassifyInputDeps(scorer=scorer, policy=ArgmaxClassificationPolicy())
 
-        result = await classify_input(deps, "text", candidates)
+        result = await classify_input(deps, "text", candidates, _DEFAULT_RULES)
 
         for i, c in enumerate(candidates):
             assert result.judgments[i].candidate == c
@@ -102,8 +107,8 @@ class TestMetricBoundaryInvariant:
         deps_low = ClassifyInputDeps(scorer=scorer_low, policy=ArgmaxClassificationPolicy())
         deps_high = ClassifyInputDeps(scorer=scorer_high, policy=ArgmaxClassificationPolicy())
 
-        result_low = await classify_input(deps_low, "text", candidates)
-        result_high = await classify_input(deps_high, "text", candidates)
+        result_low = await classify_input(deps_low, "text", candidates, _DEFAULT_RULES)
+        result_high = await classify_input(deps_high, "text", candidates, _DEFAULT_RULES)
 
         assert result_low.selected == Candidate("1")
         assert result_high.selected == Candidate("1")
@@ -135,8 +140,8 @@ class TestMetricBoundaryInvariant:
         deps_a = ClassifyInputDeps(scorer=scorer_a, policy=ArgmaxClassificationPolicy())
         deps_b = ClassifyInputDeps(scorer=scorer_b, policy=ArgmaxClassificationPolicy())
 
-        result_a = await classify_input(deps_a, "text", candidates)
-        result_b = await classify_input(deps_b, "text", candidates)
+        result_a = await classify_input(deps_a, "text", candidates, _DEFAULT_RULES)
+        result_b = await classify_input(deps_b, "text", candidates, _DEFAULT_RULES)
 
         predicted_a = int(result_a.selected.value)
         predicted_b = int(result_b.selected.value)

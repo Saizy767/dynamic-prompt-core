@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import typing
+from collections.abc import Sequence
 
 import pytest
 
@@ -26,6 +27,7 @@ class TestCandidateScorerProtocol:
                 self,
                 text: str,
                 candidates: list[Candidate],
+                rules: Sequence[str],
             ) -> list[Judgment]:
                 return [Judgment(c, 0.0) for c in candidates]
 

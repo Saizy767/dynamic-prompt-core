@@ -35,6 +35,7 @@ class _StubContractModel:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: object,
     ) -> BatchedLogits:
         items = []
         for seq in input_ids:

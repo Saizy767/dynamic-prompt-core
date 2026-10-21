@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import tomllib
@@ -49,6 +50,9 @@ class MetricsError(ValueError):
     """Raised when a results artifact is invalid or cannot be loaded."""
 
 
+log = logging.getLogger(__name__)
+
+
 # --------------------------------------------------------------------------- #
 #  Config
 # --------------------------------------------------------------------------- #
@@ -58,6 +62,7 @@ class MetricsConfig:
     group_short_max: int = DEFAULT_GROUP_SHORT_MAX
     group_long_min: int = DEFAULT_GROUP_LONG_MIN
     output_dir: str = DEFAULT_OUTPUT_DIR
+    log_to_file: bool = False
 
     @classmethod
     def from_config(cls, config_path: str = DEFAULT_CONFIG_PATH) -> MetricsConfig:
@@ -69,6 +74,7 @@ class MetricsConfig:
             group_short_max=int(m.get("group_short_max", DEFAULT_GROUP_SHORT_MAX)),
             group_long_min=int(m.get("group_long_min", DEFAULT_GROUP_LONG_MIN)),
             output_dir=m.get("output_dir", DEFAULT_OUTPUT_DIR),
+            log_to_file=bool(m.get("log_to_file", False)),
         )
 
 
@@ -313,6 +319,116 @@ def _group_breakdown(ok_rows: list[dict[str, Any]], config: MetricsConfig) -> di
 
 
 # --------------------------------------------------------------------------- #
+#  Metric results logging
+# --------------------------------------------------------------------------- #
+DEFAULT_METRICS_LOG_FILENAME = "metrics.log"
+
+
+def _write_metrics_log(metrics: dict[str, Any], output_dir: str) -> None:
+    """Append a metrics summary as a JSON line to ``{output_dir}/metrics/metrics.log``."""
+    log_dir = os.path.join(output_dir, "metrics")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, DEFAULT_METRICS_LOG_FILENAME)
+
+    entry: dict[str, Any] = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "run_id": metrics.get("run_id", "unknown"),
+        "prompt_version": metrics.get("prompt_version", "unknown"),
+        "split": metrics.get("split", "unknown"),
+        "metrics_available": metrics.get("metrics_available", False),
+        "counts": metrics.get("counts", {}),
+    }
+
+    if metrics.get("metrics_available", False):
+        f1 = metrics.get("f1", {})
+        entry.update(
+            {
+                "accuracy": metrics.get("accuracy"),
+                "accuracy_over_total": metrics.get("accuracy_over_total"),
+                "macro_f1": f1.get("macro"),
+                "minority_f1": f1.get("minority"),
+                "weighted_f1": f1.get("weighted"),
+                "f1": {"0": f1.get("0"), "1": f1.get("1")},
+                "precision": metrics.get("precision"),
+                "recall": metrics.get("recall"),
+                "confusion_matrix": metrics.get("confusion_matrix"),
+                "minority_class": metrics.get("minority_class"),
+                "bias": metrics.get("bias"),
+            }
+        )
+
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def log_metrics(metrics: dict[str, Any], output_dir: str | None = None) -> None:
+    """Log a summary of computed metric results.
+
+    Logs accuracy, F1 variants, per-class precision/recall, confusion matrix,
+    bias, and counts at INFO level. Logs a WARNING when metrics are unavailable
+    (no ok records). When ``output_dir`` is provided, also appends a structured
+    JSON record to ``{output_dir}/metrics/metrics.log``.
+    """
+    run_id = metrics.get("run_id", "unknown")
+    version = metrics.get("prompt_version", "unknown")
+    split = metrics.get("split", "unknown")
+    counts = metrics.get("counts", {})
+
+    if not metrics.get("metrics_available", False):
+        log.warning(
+            "metrics unavailable: run_id=%s version=%s split=%s total=%d ok=%d failed=%d",
+            run_id,
+            version,
+            split,
+            counts.get("total", 0),
+            counts.get("ok", 0),
+            counts.get("failed", 0),
+        )
+        if output_dir is not None:
+            _write_metrics_log(metrics, output_dir)
+        return
+
+    f1 = metrics["f1"]
+    precision = metrics["precision"]
+    recall = metrics["recall"]
+    confusion = metrics["confusion_matrix"]
+    bias = metrics["bias"]
+
+    log.info(
+        "metrics: run_id=%s version=%s split=%s "
+        "accuracy=%.4f macro_f1=%.4f minority_f1=%.4f weighted_f1=%.4f "
+        "f1(0=%.4f 1=%.4f) precision(0=%.4f 1=%.4f) recall(0=%.4f 1=%.4f) "
+        "confusion(tp=%d tn=%d fp=%d fn=%d) "
+        "bias(gap=%.4f biased=%s) total=%d ok=%d failed=%d",
+        run_id,
+        version,
+        split,
+        metrics["accuracy"],
+        f1["macro"],
+        f1["minority"],
+        f1["weighted"],
+        f1["0"],
+        f1["1"],
+        precision["0"],
+        precision["1"],
+        recall["0"],
+        recall["1"],
+        confusion["tp"],
+        confusion["tn"],
+        confusion["fp"],
+        confusion["fn"],
+        bias["gap"],
+        bias["biased"],
+        counts.get("total", 0),
+        counts.get("ok", 0),
+        counts.get("failed", 0),
+    )
+
+    if output_dir is not None:
+        _write_metrics_log(metrics, output_dir)
+
+
+# --------------------------------------------------------------------------- #
 #  Full metrics computation
 # --------------------------------------------------------------------------- #
 def compute_metrics(
@@ -367,6 +483,7 @@ def compute_metrics(
                 "groups": None,
             }
         )
+        log_metrics(result, config.output_dir if config.log_to_file else None)
         return result
 
     accuracy = _compute_accuracy(ok_rows)
@@ -404,6 +521,7 @@ def compute_metrics(
             "groups": groups,
         }
     )
+    log_metrics(result, config.output_dir if config.log_to_file else None)
     return result
 
 

@@ -67,7 +67,8 @@ def dump_state(
     name = f"state_{state.run_id}_{timestamp}.json"
     path = os.path.join(output_dir, name)
     payload = [state.to_dict()]
-    return run_repository.save_results(payload, state.run_id, path)
+    state_run_id = f"state_{state.run_id}_{timestamp}"
+    return run_repository.save_results(payload, state_run_id, path)
 
 
 def load_state(path: str) -> CycleState:

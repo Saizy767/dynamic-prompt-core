@@ -16,6 +16,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+_DEFAULT_RULES = ["rule a", "rule b", "rule c"]
+
+
 @pytest.fixture
 def real_model_name() -> str:
     return os.environ.get("REAL_MODEL_NAME", "gpt2")
@@ -58,7 +61,7 @@ class TestRealModelBatchScoring:
             Candidate("weather"),
         ]
 
-        judgments = await scorer.score(text, candidates)
+        judgments = await scorer.score(text, candidates, _DEFAULT_RULES)
 
         assert len(judgments) == 3
         for j in judgments:

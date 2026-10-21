@@ -25,6 +25,9 @@ from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
 )
 
 
+_DEFAULT_RULES = ["rule a", "rule b", "rule c"]
+
+
 class StubTokenizer:
     """Deterministic tokenizer: maps each character to its ord value.
 
@@ -110,6 +113,7 @@ class StubModel:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: object,
     ) -> BatchedLogits:
         self.forward_batch_calls.append((list(input_ids), list(attention_mask)))
         items: list[SequenceLogits] = []
@@ -143,6 +147,7 @@ class StubModelWithProb:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: object,
     ) -> BatchedLogits:
         self.forward_batch_calls.append((list(input_ids), list(attention_mask)))
         items: list[SequenceLogits] = []
@@ -170,6 +175,7 @@ class FailingModel:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: object,
     ) -> BatchedLogits:
         raise self._exc
 
@@ -195,6 +201,7 @@ class PartialFailingModel:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: object,
     ) -> BatchedLogits:
         for ids, mask in zip(input_ids, attention_mask, strict=True):
             unpadded = tuple(
@@ -223,7 +230,7 @@ class TestPortContract:
         scorer = _make_scorer(model=model)
 
         candidates = [Candidate("a"), Candidate("b"), Candidate("c")]
-        judgments = await scorer.score("text", candidates)
+        judgments = await scorer.score("text", candidates, _DEFAULT_RULES)
 
         assert len(judgments) == 3
 
@@ -232,7 +239,7 @@ class TestPortContract:
         scorer = _make_scorer(model=model)
 
         candidates = [Candidate("c"), Candidate("a"), Candidate("b")]
-        judgments = await scorer.score("text", candidates)
+        judgments = await scorer.score("text", candidates, _DEFAULT_RULES)
 
         assert [j.candidate.value for j in judgments] == ["c", "a", "b"]
 
@@ -241,7 +248,7 @@ class TestPortContract:
         scorer = _make_scorer(model=model)
 
         candidates = [Candidate("x"), Candidate("y")]
-        judgments = await scorer.score("text", candidates)
+        judgments = await scorer.score("text", candidates, _DEFAULT_RULES)
 
         assert judgments[0].candidate == Candidate("x")
         assert judgments[1].candidate == Candidate("y")
@@ -250,7 +257,7 @@ class TestPortContract:
         model = StubModel()
         scorer = _make_scorer(model=model)
 
-        judgments = await scorer.score("text", [Candidate("a")])
+        judgments = await scorer.score("text", [Candidate("a")], _DEFAULT_RULES)
 
         j = judgments[0]
         assert not hasattr(j, "logits")
@@ -266,7 +273,7 @@ class TestMultipleCandidates:
         scorer = _make_scorer(model=model)
 
         candidates = [Candidate("a"), Candidate("b"), Candidate("c")]
-        judgments = await scorer.score("text", candidates)
+        judgments = await scorer.score("text", candidates, _DEFAULT_RULES)
 
         assert len(judgments) == 3
         assert len(model.forward_batch_calls) == 1  # batch evaluation
@@ -277,7 +284,7 @@ class TestCandidateValueVerbatim:
         model = StubModel()
         scorer = _make_scorer(model=model)
 
-        judgments = await scorer.score("text", [Candidate("  spaced  ")])
+        judgments = await scorer.score("text", [Candidate("  spaced  ")], _DEFAULT_RULES)
         assert len(judgments) == 1
 
 
@@ -287,7 +294,7 @@ class TestErrorTranslation:
         scorer = _make_scorer(model=model)
 
         with pytest.raises(CandidateScoringError) as exc_info:
-            await scorer.score("text", [Candidate("a")])
+            await scorer.score("text", [Candidate("a")], _DEFAULT_RULES)
 
         assert "torch error" in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, RuntimeError)
@@ -297,7 +304,7 @@ class TestErrorTranslation:
         scorer = _make_scorer(model=model)
 
         with pytest.raises(CandidateScoringError) as exc_info:
-            await scorer.score("text", [Candidate("a")])
+            await scorer.score("text", [Candidate("a")], _DEFAULT_RULES)
 
         assert isinstance(exc_info.value.__cause__, LLMScoringError)
 
@@ -306,7 +313,7 @@ class TestErrorTranslation:
         scorer = _make_scorer(model=model)
 
         try:
-            await scorer.score("text", [Candidate("a")])
+            await scorer.score("text", [Candidate("a")], _DEFAULT_RULES)
         except CandidateScoringError:
             pass  # Correct: only CandidateScoringError
         except Exception as exc:
@@ -318,7 +325,7 @@ class TestAtomicFailure:
         tokenizer = StubTokenizer()
         builder = ScoringPromptBuilder()
 
-        prefix = builder.build_prefix("text")
+        prefix = builder.build_prefix("text", _DEFAULT_RULES)
         candidate_b = builder.build_candidate(Candidate("b"))
         fail_seq = tuple(tokenizer.encode(prefix) + tokenizer.encode(candidate_b))
 
@@ -326,13 +333,13 @@ class TestAtomicFailure:
         scorer = _make_scorer(tokenizer=tokenizer, model=model)
 
         with pytest.raises(CandidateScoringError):
-            await scorer.score("text", [Candidate("a"), Candidate("b"), Candidate("c")])
+            await scorer.score("text", [Candidate("a"), Candidate("b"), Candidate("c")], _DEFAULT_RULES)
 
     async def test_no_partial_result_returned(self) -> None:
         tokenizer = StubTokenizer()
         builder = ScoringPromptBuilder()
 
-        prefix = builder.build_prefix("text")
+        prefix = builder.build_prefix("text", _DEFAULT_RULES)
         candidate_b = builder.build_candidate(Candidate("b"))
         fail_seq = tuple(tokenizer.encode(prefix) + tokenizer.encode(candidate_b))
 
@@ -340,7 +347,7 @@ class TestAtomicFailure:
         scorer = _make_scorer(tokenizer=tokenizer, model=model)
 
         try:
-            await scorer.score("text", [Candidate("a"), Candidate("b"), Candidate("c")])
+            await scorer.score("text", [Candidate("a"), Candidate("b"), Candidate("c")], _DEFAULT_RULES)
         except CandidateScoringError:
             pass  # Correct: raised, no partial result
         else:
@@ -352,7 +359,7 @@ class TestAsyncContract:
         model = StubModel()
         scorer = _make_scorer(model=model)
 
-        result = scorer.score("text", [Candidate("a")])
+        result = scorer.score("text", [Candidate("a")], _DEFAULT_RULES)
         assert hasattr(result, "__await__")
         await result  # Ensure the coroutine is consumed
 
@@ -382,3 +389,75 @@ class TestAclose:
             model=StubModel(),
         )
         await scorer.aclose()
+
+
+class RecordingPromptBuilder:
+    """Wraps ScoringPromptBuilder and records rules passed to build_prefix."""
+
+    def __init__(self) -> None:
+        self._inner = ScoringPromptBuilder()
+        self.recorded_rules: list[list[str]] = []
+        self.build_prefix_calls: int = 0
+
+    def build_prefix(self, text: str, rules: list[str]) -> str:
+        self.build_prefix_calls += 1
+        self.recorded_rules.append(list(rules))
+        return self._inner.build_prefix(text, rules)
+
+    def build_candidate(self, candidate: Candidate) -> str:
+        return self._inner.build_candidate(candidate)
+
+    def build(self, text: str, candidate: Candidate, rules: list[str]) -> str:
+        return self.build_prefix(text, rules) + self.build_candidate(candidate)
+
+
+class TestRuleForwarding:
+    """Verify LLMLogitCandidateScorer forwards rules to the prompt builder."""
+
+    async def test_rules_passed_to_prompt_builder(self) -> None:
+        builder = RecordingPromptBuilder()
+        scorer = LLMLogitCandidateScorer(
+            prompt_builder=builder,
+            tokenizer=StubTokenizer(),
+            model=StubModel(),
+            logit_scorer=LogitScorer(),
+        )
+        rules = ["custom rule 1", "custom rule 2"]
+        await scorer.score("text", [Candidate("a"), Candidate("b")], rules)
+        assert builder.recorded_rules == [rules]
+
+    async def test_prefix_built_once_per_invocation(self) -> None:
+        builder = RecordingPromptBuilder()
+        scorer = LLMLogitCandidateScorer(
+            prompt_builder=builder,
+            tokenizer=StubTokenizer(),
+            model=StubModel(),
+            logit_scorer=LogitScorer(),
+        )
+        await scorer.score("text", [Candidate("a"), Candidate("b"), Candidate("c")], _DEFAULT_RULES)
+        assert builder.build_prefix_calls == 1
+
+    async def test_different_rules_forwarded(self) -> None:
+        builder = RecordingPromptBuilder()
+        scorer = LLMLogitCandidateScorer(
+            prompt_builder=builder,
+            tokenizer=StubTokenizer(),
+            model=StubModel(),
+            logit_scorer=LogitScorer(),
+        )
+        rules_a = ["rule a1"]
+        rules_b = ["rule b1", "rule b2"]
+        await scorer.score("text", [Candidate("a")], rules_a)
+        await scorer.score("text", [Candidate("a")], rules_b)
+        assert builder.recorded_rules == [rules_a, rules_b]
+
+    async def test_empty_rules_forwarded_not_substituted(self) -> None:
+        builder = RecordingPromptBuilder()
+        scorer = LLMLogitCandidateScorer(
+            prompt_builder=builder,
+            tokenizer=StubTokenizer(),
+            model=StubModel(),
+            logit_scorer=LogitScorer(),
+        )
+        await scorer.score("text", [Candidate("a")], [])
+        assert builder.recorded_rules == [[]]

@@ -1,4 +1,5 @@
 """Public API for the metrics service package."""
+
 from __future__ import annotations
 
 from dynamic_prompt_core.application.services.metrics.metrics import (
@@ -7,6 +8,7 @@ from dynamic_prompt_core.application.services.metrics.metrics import (
     compare_versions,
     compute_metrics,
     load_results,
+    log_metrics,
 )
 
 __all__ = [
@@ -15,4 +17,5 @@ __all__ = [
     "compare_versions",
     "compute_metrics",
     "load_results",
+    "log_metrics",
 ]

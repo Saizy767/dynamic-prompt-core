@@ -148,7 +148,12 @@ class FakeCandidateScorer:
     ArgmaxClassificationPolicy always selects the first candidate.
     """
 
-    async def score(self, text: str, candidates: list[Candidate]) -> list[Judgment]:
+    async def score(
+        self,
+        text: str,
+        candidates: list[Candidate],
+        rules: list[str],
+    ) -> list[Judgment]:
         return [
             Judgment(candidate=c, score=float(len(candidates) - i))
             for i, c in enumerate(candidates)

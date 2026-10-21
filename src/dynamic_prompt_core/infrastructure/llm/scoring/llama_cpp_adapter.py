@@ -289,6 +289,7 @@ class LlamaCppBatchedCausalLMAdapter:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: Any,
     ) -> BatchedLogits:
         """Evaluate each batch item sequentially and return per-item logits.
 

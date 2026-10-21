@@ -204,6 +204,8 @@ class BaselineRunner:
             self._prompt_version = config.prompt_version
         self._extract_prompt = EXTRACTION_PROMPT
 
+        self._rules = self._extract_rules()
+
         self._dataset_artifact = dataset_artifact or config.dataset_artifact
         self._duration = duration
 
@@ -219,6 +221,21 @@ class BaselineRunner:
         }
 
     # -- paths -------------------------------------------------------------- #
+    def _extract_rules(self) -> list[str]:
+        """Extract classification rules from the active prompt artifact.
+
+        Uses the structured ``PromptArtifact.layers.rules`` as the source of
+        truth.  Raises a clear error for a non-default prompt with missing
+        layers rather than silently substituting default rules.
+        """
+        layers = self._classify_prompt.layers
+        if layers is None:
+            raise ValueError(
+                f"active prompt {self._classify_prompt.version!r} has no layers; "
+                "cannot extract classification rules"
+            )
+        return list(layers.rules)
+
     def _results_dir(self) -> str:
         return os.path.join(self._output_dir, "result_cycle")
 
@@ -444,7 +461,7 @@ class BaselineRunner:
                     example.id,
                     len(self._candidates),
                 )
-                judgments = await self._scorer.score(example.text, self._candidates)
+                judgments = await self._scorer.score(example.text, self._candidates, self._rules)
                 score_latency_ms = (time.monotonic() - score_start) * 1000
                 log.info(
                     "BaselineRunner: scorer.score END id=%s in %.2fms",

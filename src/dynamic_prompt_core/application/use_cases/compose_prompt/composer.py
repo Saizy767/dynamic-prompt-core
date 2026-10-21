@@ -47,7 +47,7 @@ DEFAULT_CONFIG_PATH = "config.toml"
 DEFAULT_OUTPUT_DIR = "data/results"
 DEFAULT_MAX_RULES = 5
 DEFAULT_MAX_PROMPT_TOKENS = 300
-DEFAULT_MAX_RULE_WORDS = 15
+DEFAULT_MAX_RULE_WORDS = 20
 DEFAULT_DISTORTION_THRESHOLD = 0.75
 DEFAULT_ALLOW_REFORMULATION = True
 DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
@@ -210,7 +210,7 @@ _FORMULATION_PROMPT = (
     "a semantic cluster of texts, along with the cluster's precision and "
     "frequency, and formulate a single concise classification rule that tells a "
     "binary classifier when to assign class 1 based on that cluster.\n\n"
-    "The rule must be a single sentence, at most 15 words, in the same language "
+    "The rule must be a single sentence, at most 20 words, in the same language "
     "as the theses. Do not add explanations, examples, or numbering.\n\n"
     'Reply with a single JSON object: {"rule": "..."}.'
 )
@@ -218,7 +218,7 @@ _FORMULATION_PROMPT = (
 _REFORMULATION_INSTRUCTION = (
     "\n\nThe previous rule drifted from the source cluster. Reformulate it so it "
     "stays closer to the meaning of the representative theses above, while "
-    "remaining a single sentence of at most 15 words."
+    "remaining a single sentence of at most 20 words."
 )
 
 

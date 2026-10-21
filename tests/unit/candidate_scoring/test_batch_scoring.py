@@ -28,6 +28,8 @@ from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
     BatchTokenizerAdapter,
 )
 
+_DEFAULT_RULES = ["rule a", "rule b", "rule c"]
+
 VOCAB_SIZE = 256
 
 
@@ -100,6 +102,7 @@ class StubBatchModel:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: object,
     ) -> BatchedLogits:
         self.forward_batch_calls.append((list(input_ids), list(attention_mask)))
         batch_logits: list[SequenceLogits] = []
@@ -120,6 +123,7 @@ class StubBatchModelWithProb:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: object,
     ) -> BatchedLogits:
         self.forward_batch_calls.append((list(input_ids), list(attention_mask)))
         batch_logits: list[SequenceLogits] = []
@@ -146,6 +150,7 @@ class FailingBatchModel:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: object,
     ) -> BatchedLogits:
         raise self._exc
 
@@ -432,7 +437,7 @@ class TestBatchScorerOneForwardCall:
         scorer = _make_batch_scorer(model=model)
 
         candidates = [Candidate("a"), Candidate("b"), Candidate("c")]
-        judgments = await scorer.score("text", candidates)
+        judgments = await scorer.score("text", candidates, _DEFAULT_RULES)
 
         assert len(judgments) == 3
         assert len(model.forward_batch_calls) == 1
@@ -442,7 +447,7 @@ class TestBatchScorerOneForwardCall:
         scorer = _make_batch_scorer(model=model)
 
         candidates = [Candidate("c"), Candidate("a"), Candidate("b")]
-        judgments = await scorer.score("text", candidates)
+        judgments = await scorer.score("text", candidates, _DEFAULT_RULES)
 
         assert [j.candidate.value for j in judgments] == ["c", "a", "b"]
 
@@ -458,7 +463,7 @@ class TestBatchErrorTranslation:
         scorer = _make_batch_scorer(model=model)
 
         with pytest.raises(CandidateScoringError) as exc_info:
-            await scorer.score("text", [Candidate("a")])
+            await scorer.score("text", [Candidate("a")], _DEFAULT_RULES)
 
         assert "torch error" in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, RuntimeError)
@@ -468,7 +473,7 @@ class TestBatchErrorTranslation:
         scorer = _make_batch_scorer(model=model)
 
         try:
-            await scorer.score("text", [Candidate("a"), Candidate("b"), Candidate("c")])
+            await scorer.score("text", [Candidate("a"), Candidate("b"), Candidate("c")], _DEFAULT_RULES)
         except CandidateScoringError:
             pass
         else:
@@ -534,8 +539,8 @@ class TestSequentialCompatibilityAdapter:
         )
 
         candidates = [Candidate("a"), Candidate("b"), Candidate("c")]
-        batch_judgments = await batch_scorer.score("text", candidates)
-        seq_judgments = await seq_scorer.score("text", candidates)
+        batch_judgments = await batch_scorer.score("text", candidates, _DEFAULT_RULES)
+        seq_judgments = await seq_scorer.score("text", candidates, _DEFAULT_RULES)
 
         for bj, sj in zip(batch_judgments, seq_judgments, strict=True):
             assert bj.score == pytest.approx(sj.score)
@@ -574,8 +579,8 @@ class TestBatchSequentialEquivalence:
             Candidate("financial regulation"),
             Candidate("international financial regulation"),
         ]
-        batch_judgments = await batch_scorer.score("text", candidates)
-        seq_judgments = await seq_scorer.score("text", candidates)
+        batch_judgments = await batch_scorer.score("text", candidates, _DEFAULT_RULES)
+        seq_judgments = await seq_scorer.score("text", candidates, _DEFAULT_RULES)
 
         batch_map = {j.candidate.value: j.score for j in batch_judgments}
         seq_map = {j.candidate.value: j.score for j in seq_judgments}
@@ -595,7 +600,7 @@ class TestBatchOrderingInvariant:
         scorer = _make_batch_scorer(model=model)
 
         candidates = [Candidate("alpha"), Candidate("beta"), Candidate("gamma")]
-        judgments = await scorer.score("text", candidates)
+        judgments = await scorer.score("text", candidates, _DEFAULT_RULES)
 
         assert len(judgments) == len(candidates)
         for i, candidate in enumerate(candidates):
@@ -610,7 +615,7 @@ class TestBatchOrderingInvariant:
             Candidate("longer candidate"),
             Candidate("medium"),
         ]
-        judgments = await scorer.score("text", candidates)
+        judgments = await scorer.score("text", candidates, _DEFAULT_RULES)
 
         assert [j.candidate.value for j in judgments] == [
             "x",
@@ -650,8 +655,8 @@ class TestSingleCandidateBatch:
         )
 
         candidate = Candidate("only one")
-        batch_judgments = await batch_scorer.score("text", [candidate])
-        seq_judgments = await seq_scorer.score("text", [candidate])
+        batch_judgments = await batch_scorer.score("text", [candidate], _DEFAULT_RULES)
+        seq_judgments = await seq_scorer.score("text", [candidate], _DEFAULT_RULES)
 
         assert len(batch_judgments) == 1
         assert batch_judgments[0].score == pytest.approx(seq_judgments[0].score)
@@ -678,7 +683,7 @@ class TestPaddingInvariance:
             model=model_alone,
             logit_scorer=logit_scorer,
         )
-        judgments_alone = await scorer_alone.score("text", [short])
+        judgments_alone = await scorer_alone.score("text", [short], _DEFAULT_RULES)
         score_alone = judgments_alone[0].score
 
         model_batch = StubBatchModel()
@@ -688,7 +693,7 @@ class TestPaddingInvariance:
             model=model_batch,
             logit_scorer=logit_scorer,
         )
-        judgments_batch = await scorer_batch.score("text", [short, long])
+        judgments_batch = await scorer_batch.score("text", [short, long], _DEFAULT_RULES)
         score_batch = judgments_batch[0].score
 
         assert score_alone == pytest.approx(1.0)

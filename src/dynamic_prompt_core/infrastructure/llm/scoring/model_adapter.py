@@ -117,6 +117,7 @@ class TorchBatchedCausalLMAdapter:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: Any,
     ) -> BatchedLogits:
         import torch
 
@@ -158,6 +159,7 @@ class SequentialBatchCompatibilityAdapter:
         self,
         input_ids: list[list[int]],
         attention_mask: list[list[int]],
+        **kwargs: Any,
     ) -> BatchedLogits:
         items: list[SequenceLogits] = []
         for ids, mask in zip(input_ids, attention_mask, strict=True):

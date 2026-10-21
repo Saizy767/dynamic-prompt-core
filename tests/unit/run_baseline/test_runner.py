@@ -20,6 +20,8 @@ from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.judgment import Judgment
+from dynamic_prompt_core.domain.prompts import CLASSIFICATION_PROMPT_V0, PromptArtifact
+from dynamic_prompt_core.domain.prompts.base import PromptLayer
 from dynamic_prompt_core.infrastructure.llm import CallResult, ResponseStatus
 
 
@@ -259,3 +261,81 @@ async def test_runner_skip_extraction() -> None:
     assert row.extract_latency_ms == 0.0
     assert row.raw_extract is None
     assert row.classify_status == "ok"
+
+
+# --------------------------------------------------------------------------- #
+#  Rule extraction tests
+# --------------------------------------------------------------------------- #
+def test_default_prompt_rules_extracted() -> None:
+    """The default classification prompt's rules are extracted at construction."""
+    runner = _make_runner()
+    layers = CLASSIFICATION_PROMPT_V0.layers
+    expected = list(layers.rules) if layers else []
+    assert runner._rules == expected
+
+
+def test_non_default_prompt_with_valid_layers_rules_extracted() -> None:
+    """A non-default prompt with valid layers has its rules extracted."""
+    custom_layers = PromptLayer(
+        role="role",
+        task="task",
+        rules=["custom rule 1", "custom rule 2", "custom rule 3"],
+        output_contract="contract",
+        fallback="fallback",
+    )
+    custom_prompt = PromptArtifact(
+        version="classify-v1",
+        layers=custom_layers,
+        text="rendered text",
+    )
+    task = MagicMock()
+    runner = BaselineRunner(
+        task=task,
+        config=RunnerConfig(),
+        split="dev",
+        scorer=AsyncMock(),
+        policy=ArgmaxClassificationPolicy(),
+        candidates=_make_candidates(),
+        classify_prompt=custom_prompt,
+    )
+    assert runner._rules == ["custom rule 1", "custom rule 2", "custom rule 3"]
+
+
+def test_non_default_prompt_with_none_layers_raises() -> None:
+    """A non-default prompt with None layers raises at construction."""
+    malformed_prompt = PromptArtifact(
+        version="classify-v1",
+        layers=None,
+        text="some text",
+    )
+    task = MagicMock()
+    with pytest.raises(ValueError, match="no layers"):
+        BaselineRunner(
+            task=task,
+            config=RunnerConfig(),
+            split="dev",
+            scorer=AsyncMock(),
+            policy=ArgmaxClassificationPolicy(),
+            candidates=_make_candidates(),
+            classify_prompt=malformed_prompt,
+        )
+
+
+@pytest.mark.asyncio
+async def test_rules_passed_to_scorer_on_score() -> None:
+    """The runner passes extracted rules to scorer.score()."""
+    candidates = _make_candidates()
+    scorer = AsyncMock()
+    scorer.score.return_value = [
+        Judgment(candidate=candidates[0], score=0.2),
+        Judgment(candidate=candidates[1], score=0.8),
+    ]
+    runner = _make_runner(scorer=scorer, candidates=candidates)
+    runner._semaphore = asyncio.Semaphore(1)
+    example = _FakeRecord(id=1, text="text", label=1)
+    results: list[ResultRow | None] = [None]
+
+    await runner._process_example(MagicMock(), example, 0, results)
+
+    call_args = scorer.score.call_args
+    assert call_args.args[2] == runner._rules

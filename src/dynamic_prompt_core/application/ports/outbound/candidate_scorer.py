@@ -1,6 +1,7 @@
 """Outbound port: contract for candidate scoring."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from dynamic_prompt_core.domain.models.candidate import Candidate
@@ -25,14 +26,22 @@ class CandidateScorer(Protocol):
 
     The port exposes no logits, token IDs, tokenizer APIs, model objects, or
     provider-specific types.
+
+    The ``rules`` parameter carries the active classification rules as semantic
+    criteria (plain strings from ``PromptArtifact.layers.rules``), not prompt
+    fragments or rendered prompt text.
     """
 
     async def score(
         self,
         text: str,
         candidates: list[Candidate],
+        rules: Sequence[str],
     ) -> list[Judgment]:
         """Evaluate candidates against the classification input text.
+
+        ``rules`` are the active classification rules from the selected prompt
+        version's ``PromptArtifact.layers.rules``.
 
         Returns exactly one Judgment per candidate. Raises an exception if any
         candidate cannot be evaluated.

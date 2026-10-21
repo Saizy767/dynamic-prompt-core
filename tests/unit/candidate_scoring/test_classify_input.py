@@ -1,6 +1,8 @@
 """Tests for the ClassifyInput use case."""
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pytest
 
 from dynamic_prompt_core.application.services.classification_policy import (
@@ -13,20 +15,23 @@ from dynamic_prompt_core.application.use_cases.classify_input import (
 from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.judgment import Judgment
 
+_DEFAULT_RULES: Sequence[str] = ["rule a", "rule b", "rule c"]
+
 
 class StubScorer:
     """Deterministic stub scorer for testing."""
 
     def __init__(self, scores: dict[str, float] | None = None) -> None:
         self._scores = scores or {}
-        self.calls: list[tuple[str, list[Candidate]]] = []
+        self.calls: list[tuple[str, list[Candidate], list[str]]] = []
 
     async def score(
         self,
         text: str,
         candidates: list[Candidate],
+        rules: Sequence[str],
     ) -> list[Judgment]:
-        self.calls.append((text, candidates))
+        self.calls.append((text, candidates, list(rules)))
         return [
             Judgment(c, self._scores.get(c.value, 0.0)) for c in candidates
         ]
@@ -53,11 +58,11 @@ class TestClassifyInput:
         policy = StubPolicy()
         deps = ClassifyInputDeps(scorer=scorer, policy=policy)
 
-        result = await classify_input(deps, "some text", _candidates("a", "b"))
+        result = await classify_input(deps, "some text", _candidates("a", "b"), _DEFAULT_RULES)
 
         assert result.selected == Candidate("b")
         assert len(scorer.calls) == 1
-        assert scorer.calls[0] == ("some text", _candidates("a", "b"))
+        assert scorer.calls[0] == ("some text", _candidates("a", "b"), list(_DEFAULT_RULES))
         assert len(policy.calls) == 1
 
     async def test_empty_candidates_rejected_before_scoring(self) -> None:
@@ -66,7 +71,7 @@ class TestClassifyInput:
         deps = ClassifyInputDeps(scorer=scorer, policy=policy)
 
         with pytest.raises(ValueError):
-            await classify_input(deps, "text", [])
+            await classify_input(deps, "text", [], _DEFAULT_RULES)
 
         assert scorer.calls == []
         assert policy.calls == []
@@ -77,7 +82,7 @@ class TestClassifyInput:
         deps = ClassifyInputDeps(scorer=scorer, policy=policy)
 
         with pytest.raises(ValueError):
-            await classify_input(deps, "text", _candidates("a", "a"))
+            await classify_input(deps, "text", _candidates("a", "a"), _DEFAULT_RULES)
 
         assert scorer.calls == []
         assert policy.calls == []
@@ -87,7 +92,7 @@ class TestClassifyInput:
         policy = StubPolicy()
         deps = ClassifyInputDeps(scorer=scorer, policy=policy)
 
-        await classify_input(deps, "input text", _candidates("a"))
+        await classify_input(deps, "input text", _candidates("a"), _DEFAULT_RULES)
 
         assert scorer.calls[0][0] == "input text"
         assert scorer.calls[0][1] == _candidates("a")
@@ -97,7 +102,7 @@ class TestClassifyInput:
         policy = StubPolicy()
         deps = ClassifyInputDeps(scorer=scorer, policy=policy)
 
-        await classify_input(deps, "text", _candidates("a"))
+        await classify_input(deps, "text", _candidates("a"), _DEFAULT_RULES)
 
         assert len(policy.calls[0]) == 1
         assert policy.calls[0][0].candidate == Candidate("a")
@@ -111,8 +116,8 @@ class TestClassifyInput:
         deps1 = ClassifyInputDeps(scorer=scorer1, policy=policy)
         deps2 = ClassifyInputDeps(scorer=scorer2, policy=policy)
 
-        result1 = await classify_input(deps1, "text", _candidates("a", "b"))
-        result2 = await classify_input(deps2, "text", _candidates("a", "b"))
+        result1 = await classify_input(deps1, "text", _candidates("a", "b"), _DEFAULT_RULES)
+        result2 = await classify_input(deps2, "text", _candidates("a", "b"), _DEFAULT_RULES)
 
         assert result1.selected == Candidate("b")
         assert result2.selected == Candidate("a")
@@ -125,7 +130,7 @@ class TestClassifyInput:
         policy = ArgmaxClassificationPolicy()
         deps = ClassifyInputDeps(scorer=scorer, policy=policy)
 
-        result = await classify_input(deps, "example input", _candidates("0", "1"))
+        result = await classify_input(deps, "example input", _candidates("0", "1"), _DEFAULT_RULES)
 
         assert result.selected == Candidate("1")
         assert len(result.judgments) == 2
@@ -140,7 +145,7 @@ class TestClassifyInput:
         policy = ArgmaxClassificationPolicy()
         deps = ClassifyInputDeps(scorer=scorer, policy=policy)
 
-        result = await classify_input(deps, "text", candidates)
+        result = await classify_input(deps, "text", candidates, _DEFAULT_RULES)
 
         for i, candidate in enumerate(candidates):
             assert result.judgments[i].candidate == candidate

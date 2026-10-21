@@ -4,35 +4,33 @@ The prompt builder owns the model-facing scoring prompt format.  It exposes
 the prefix and candidate portions separately so the scorer can determine the
 tokenization boundary without substring search.
 
-The semantic prefix intentionally duplicates the relevant semantic content of
-``CLASSIFICATION_PROMPT_V0``.  The two prompts MUST NOT be treated as
-automatically synchronized: changes to the generative prompt do not
-automatically modify the judgment prompt, and changes to the judgment prompt
-require explicit review.
+The active classification rules are supplied per-call as semantic criteria
+strings (from ``PromptArtifact.layers.rules``).  The builder incorporates them
+into the prompt between the fixed candidate-evaluation instructions and the
+input text.  The builder does NOT duplicate or reference the default
+classification rules from ``CLASSIFICATION_PROMPT_V0``.
 """
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 from dynamic_prompt_core.domain.models.candidate import Candidate
 
 _CANDIDATE_LABEL = "Candidate: "
 
-_SEMANTIC_PREFIX = (
+_FIXED_INSTRUCTIONS = (
     "You are a binary text classifier. You read a short text and evaluate "
     "how well a candidate label matches the text.\n\n"
     "Evaluate how well the candidate describes or matches the input text "
-    "according to the following criteria:\n"
-    "- The candidate is relevant if the text matches the target category "
-    "described by the candidate.\n"
-    "- The candidate is irrelevant if the text does not match, e.g. it is "
-    "unrelated, metaphorical, or off-topic.\n"
-    "- Base the evaluation only on the content of the text, not on hashtags, "
-    "mentions, or URLs alone.\n"
-    "- If the text uses target-category words metaphorically or in jest, the "
-    "candidate is not a good match.\n"
-    "- Factual statements that clearly match the target category indicate a "
-    "good match.\n"
-    "- If the evidence is genuinely ambiguous, the candidate is a weak match.\n\n"
+    "according to the classification rules below.\n\n"
 )
+
+
+def _format_rules(rules: Sequence[str]) -> str:
+    if not rules:
+        return ""
+    lines = "\n".join(f"- {r}" for r in rules)
+    return f"Classification rules:\n{lines}\n\n"
 
 
 class ScoringPromptBuilder:
@@ -40,26 +38,27 @@ class ScoringPromptBuilder:
 
     The prompt format is:
 
-        {semantic_prefix}{input}\\nCandidate: {candidate}
+        {fixed_instructions}Classification rules:\\n- {rule 1}\\n...
+        \\n\\nInput text:\\n{text}\\nCandidate: {candidate}
 
-    The prefix (``{semantic_prefix}{input}\\nCandidate: ``) and the candidate
-    (``candidate.value`` verbatim) are exposed separately so the scorer can
-    encode them independently and determine the tokenization boundary
-    structurally.
+    The prefix (everything up to and including ``Candidate: ``) and the
+    candidate (``candidate.value`` verbatim) are exposed separately so the
+    scorer can encode them independently and determine the tokenization
+    boundary structurally.
 
     The candidate continuation is the final textual component of the prompt:
     no semantic instructions or other generated text appear between the
     candidate label and the candidate value.
     """
 
-    def build_prefix(self, text: str) -> str:
+    def build_prefix(self, text: str, rules: Sequence[str]) -> str:
         """Return the prompt text preceding the candidate value."""
-        return f"{_SEMANTIC_PREFIX}{text}\n{_CANDIDATE_LABEL}"
+        return f"{_FIXED_INSTRUCTIONS}{_format_rules(rules)}Input text:\n{text}\n{_CANDIDATE_LABEL}"
 
     def build_candidate(self, candidate: Candidate) -> str:
         """Return the candidate value verbatim, with no normalization."""
         return candidate.value
 
-    def build(self, text: str, candidate: Candidate) -> str:
+    def build(self, text: str, candidate: Candidate, rules: Sequence[str]) -> str:
         """Return the full scoring prompt."""
-        return self.build_prefix(text) + self.build_candidate(candidate)
+        return self.build_prefix(text, rules) + self.build_candidate(candidate)

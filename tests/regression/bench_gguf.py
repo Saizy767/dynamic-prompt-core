@@ -27,6 +27,9 @@ from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
 )
 
 
+_DEFAULT_RULES = ["rule a", "rule b", "rule c"]
+
+
 def run_benchmark(model_path: str, n_examples: int = 20) -> dict[str, object]:
     import asyncio
 
@@ -46,7 +49,7 @@ def run_benchmark(model_path: str, n_examples: int = 20) -> dict[str, object]:
     for i in range(n_examples):
         text = f"example text number {i}"
         t1 = time.perf_counter()
-        asyncio.run(scorer.score(text, candidates))
+        asyncio.run(scorer.score(text, candidates, _DEFAULT_RULES))
         latencies.append(time.perf_counter() - t1)
 
     current, peak = tracemalloc.get_traced_memory()

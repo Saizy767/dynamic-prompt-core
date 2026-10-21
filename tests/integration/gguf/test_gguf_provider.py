@@ -19,6 +19,9 @@ from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
 from .conftest import gguf_skip
 
 
+_DEFAULT_RULES = ["rule a", "rule b", "rule c"]
+
+
 @gguf_skip
 class TestGgufProviderIntegration:
     async def test_model_loads_successfully(self, gguf_model_path: str) -> None:
@@ -28,7 +31,7 @@ class TestGgufProviderIntegration:
             gguf=GgufParams(n_ctx=512),
         )
         scorer = build_candidate_scorer(cfg)
-        judgments = await scorer.score("hello", [Candidate("yes"), Candidate("no")])
+        judgments = await scorer.score("hello", [Candidate("yes"), Candidate("no")], _DEFAULT_RULES)
         assert len(judgments) == 2
 
     async def test_repeated_evaluation_consistent(self, gguf_model_path: str) -> None:
@@ -39,8 +42,8 @@ class TestGgufProviderIntegration:
         )
         scorer = build_candidate_scorer(cfg)
         candidates = [Candidate("yes"), Candidate("no")]
-        j1 = await scorer.score("hello", candidates)
-        j2 = await scorer.score("hello", candidates)
+        j1 = await scorer.score("hello", candidates, _DEFAULT_RULES)
+        j2 = await scorer.score("hello", candidates, _DEFAULT_RULES)
         for a, b in zip(j1, j2, strict=True):
             assert a.score == pytest.approx(b.score)
 
@@ -52,8 +55,8 @@ class TestGgufProviderIntegration:
         )
         scorer = build_candidate_scorer(cfg)
         candidates = [Candidate("yes"), Candidate("no")]
-        j1 = await scorer.score("first example text", candidates)
-        j2 = await scorer.score("second different example text", candidates)
+        j1 = await scorer.score("first example text", candidates, _DEFAULT_RULES)
+        j2 = await scorer.score("second different example text", candidates, _DEFAULT_RULES)
         assert j1[0].score != pytest.approx(j2[0].score) or j1[0].score == pytest.approx(
             j2[0].score
         )
@@ -66,7 +69,7 @@ class TestGgufProviderIntegration:
         )
         scorer = build_candidate_scorer(cfg)
         candidates = [Candidate("alpha"), Candidate("beta"), Candidate("gamma")]
-        judgments = await scorer.score("text", candidates)
+        judgments = await scorer.score("text", candidates, _DEFAULT_RULES)
         assert [j.candidate.value for j in judgments] == ["alpha", "beta", "gamma"]
 
     async def test_single_and_multi_token_labels(self, gguf_model_path: str) -> None:
@@ -76,8 +79,8 @@ class TestGgufProviderIntegration:
             gguf=GgufParams(n_ctx=512),
         )
         scorer = build_candidate_scorer(cfg)
-        single = await scorer.score("text", [Candidate("yes")])
-        multi = await scorer.score("text", [Candidate("positive sentiment")])
+        single = await scorer.score("text", [Candidate("yes")], _DEFAULT_RULES)
+        multi = await scorer.score("text", [Candidate("positive sentiment")], _DEFAULT_RULES)
         assert len(single) == 1
         assert len(multi) == 1
         for j in [*single, *multi]:
