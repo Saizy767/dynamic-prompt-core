@@ -1,4 +1,4 @@
-# prompt-loop
+# dynamic-prompt-core
 
 Исследовательский пайплайн для итеративной оптимизации системного промпта
 бинарного классификатора на базе маленькой языковой модели (класс Tiny, до 3B
@@ -45,9 +45,12 @@ CandidateScorer.score(text, candidates) → Judgment[]
 src/dynamic_prompt_core/
   domain/            — модели без сторонних зависимостей (Candidate, Judgment, Classification, Dataset, Record)
   application/       — use cases и порты
-    ports/           — интерфейсы (CandidateScorer, LLMClient, PromptRepository, ...)
-    use_cases/       — run_cycle, run_baseline, classify_input, analyze_theses, compose_prompt, ...
+    ports/           — интерфейсы (inbound/outbound: CandidateScorer, LLMClient, PromptRepository, ...)
+    use_cases/       — run_cycle, run_baseline, classify_input, analyze_theses, compose_prompt,
+                       select_candidates, compare_versions, refine_theses, observe_cycle,
+                       evaluate_stop_criteria, cross_task_transfer
     services/        — ClassificationPolicy, metrics, clustering (чистая логика)
+    schemas/         — DTO и схемы обмена между use cases
   infrastructure/    — конкретные реализации портов (LLMLogitCandidateScorer, AsyncTask, PromptStore)
   interfaces/        — CLI и сервер (composition root)
 ```
@@ -73,26 +76,28 @@ ScoringPromptBuilder → BatchTokenizerAdapter → BatchedCausalLanguageModel
 
 #### Backend selection
 
-Поддерживается два backend'а для logit-scoring, выбираются в `[model]` секции
+Поддерживается три backend'а для logit-scoring, выбираются в `[model]` секции
 `config.toml`:
 
-- **`huggingface`** (по умолчанию) — загрузка модели через `transformers`.
+- **`huggingface`** — загрузка модели через `transformers`.
 - **`gguf`** — загрузка локального GGUF-файла через `llama-cpp-python` (опциональная
   зависимость). Backend использует тот же `LogitScorer` и `ScoringPromptBuilder`,
   что и Hugging Face; меняются только adapter'ы модели и токенизатора.
+- **`llama_server`** — HTTP-доступ к `llama-server` (Metal GPU acceleration), без
+  опциональных зависимостей — используется только core-пакет `aiohttp`. Подключается
+  к уже запущенному серверу (например, стартованному секцией `[llm]`).
 
 ```toml
 [model]
-backend = "gguf"
-model_path = "models/classifier.gguf"
+backend = "llama_server"
+model_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
 
-[model.gguf]
-n_ctx = 2048
-n_batch = 512
-seed = 42
+# [model.llama_server]
+# endpoint = "http://127.0.0.1:8080"
+# timeout = 30
 ```
 
-См. [docs/gguf-backend.md](docs/gguf-backend.md) для подробностей.
+См. [docs/gguf-backend.md](docs/gguf-backend.md) для подробностей о GGUF backend.
 
 ## Цикл оптимизации
 
@@ -101,33 +106,36 @@ seed = 42
 
 1. **Прогон активной версии** промпта на dev через `stage1-baseline-runner`.
 2. **Подсчёт метрик** через `stage1-metrics`.
-3. **ОбCбор тезисов и кластеров** через `stage1-thesis-analyzer`.
+3. **Обсбор тезисов и кластеров** через `stage1-thesis-analyzer`.
 4. **Отбор кандидатов** через `stage2-rule-candidate-selector`.
 5. **Композиция новой версии** через `stage3-prompt-composer`.
 6. **Прогон новой версии** на dev.
 7. **Сравнение и решение** (accept/rollback) через `stage2-version-comparator`.
 8. **Обновление активной версии** или переход к следующему кандидату.
-9. **Запись per-round report** и state dump.
+9. **Запись per-cycle report** и state dump.
 
 При rollback цикл пробует следующего кандидата из очереди. При accept —
 активирует новую версию в prompt store. Цикл останавливается по одной из
-причин: `max_rounds_reached`, `max_rollbacks_reached`,
-`candidate_queue_exhausted`, `unrecoverable_error`.
+причин: `max_cycles_reached`, `no_improvement`, `plateau_detected`,
+`unrecoverable_error`.
 
 ### Запуск
 
 ```bash
-# Запуск цикла (5 кругов по умолчанию)
+# Запуск цикла (3 круга по умолчанию для CLI, max_cycles из config — иначе)
 python -m dynamic_prompt_core.interfaces.cli.main cycle
 
-# Указать количество кругов
-python -m dynamic_prompt_core.interfaces.cli.main cycle --rounds 3
+# Указать количество кругов и split
+python -m dynamic_prompt_core.interfaces.cli.main cycle --cycles 3 --split dev
 
 # Возобновить с сохранённого состояния
-python -m dynamic_prompt_core.interfaces.cli.main cycle --resume data/results/state_*.json
+python -m dynamic_prompt_core.interfaces.cli.main cycle --resume data/results/state_cycle/state_*.json
 
 # Teacher refinement (refine theses)
 python -m dynamic_prompt_core.interfaces.cli.main refine --results data/results/results_*.jsonl
+
+# Observer: сводный отчёт по завершённому циклу (markdown/json)
+python -m dynamic_prompt_core.interfaces.cli.observer --run-id latest
 ```
 
 ### Конфигурация
@@ -136,14 +144,24 @@ python -m dynamic_prompt_core.interfaces.cli.main refine --results data/results/
 
 | Параметр | По умолчанию | Описание |
 |---|---|---|
-| `max_rounds` | 5 | Максимум кругов |
-| `max_consecutive_rollbacks` | 2 | Лимит подряд идущих откатов |
-| `decision_metric` | `macro_f1` | Метрика для решения accept/rollback |
-| `tie_breaker_metric` | `minority_f1` | Тай-брейкер при равенстве |
+| `max_cycles` | 5 | Максимум кругов |
 | `duration` | 0 | Количество строк датасета на круг (см. ниже) |
-| `use_teacher_refinement` | false | Включить teacher refinement |
+| `dev_split` | `dev` | Split для активного прогона и решения accept/rollback |
+| `holdout_split` | `holdout` | Split для holdout-прогона (только логируется) |
+| `prompt_start` | `0` | Стартовая версия: `0` (baseline) или `best` (новейшая из store) |
+| `prompt_store_path` | `""` | Путь к активной версии промпта (пусто — baseline v0) |
+| `thesis_bank_path` | `""` | Seed thesis-bank для цикла (пусто — строится в первом круге) |
+| `candidate_queue_path` | `""` | Seed очереди кандидатов (пусто — заполняется selector'ом) |
+| `use_teacher_refinement` | false | Включить teacher refinement между baseline и thesis-analysis |
 | `stop_on_first_error` | false | Остановка при первой ошибке шага |
-| `dump_state_after_each_round` | true | State dump после каждого круга |
+| `dump_state_after_each_cycle` | true | State dump после каждого круга |
+| `report_format` | `json` | Формат отчётов (`json`; `markdown` — planned) |
+| `output_dir` | `data/results` | Каталог артефактов цикла |
+
+Решение accept/rollback настраивается отдельно в секции `[version_comparator]`:
+`decision_metric` (по умолчанию `macro_f1`) и `tie_breaker_metric`
+(по умолчанию `minority_f1`). Дополнительные критерии ранней остановки
+(например, `plateau_detected`) — в опциональной секции `[stop_criteria]`.
 
 #### Параметр `duration`
 
@@ -153,27 +171,27 @@ python -m dynamic_prompt_core.interfaces.cli.main refine --results data/results/
 # Все строки (по умолчанию)
 duration = 0
 
-# 100 строк в каждом круге, всего max_rounds кругов
+# 100 строк в каждом круге, всего max_cycles кругов
 duration = 100
 
-# 3 круга (переопределяет max_rounds): 50, 100, 200 строк
+# 3 круга (переопределяет max_cycles): 50, 100, 200 строк
 duration = [50, 100, 200]
 ```
 
-При указании массива `max_rounds` автоматически устанавливается равным
+При указании массива `max_cycles` автоматически устанавливается равным
 `len(duration)`.
 
 ### Артефакты
 
 После каждого круга записываются:
 
-- `report_{run_id}_round{N}_{ts}.json` — per-round отчёт (метрики dev+holdout,
-  решение, изменившиеся предсказания)
-- `state_{run_id}_{ts}.json` — state dump для возобновления
-- `summary_{run_id}_{ts}.json` — финальный отчёт при остановке
-- `cycle_log_{run_id}_{ts}.jsonl` — append-only лог событий
-- `manifest_{run_id}_{prompt_version}_{split}.json` — метаданные запуска
-  (backend, model checksum, inference settings) для проверки identity при resume
+- `report_cycle/report_{run_id}_cycle{N}_{ts}.json` — per-cycle отчёт (метрики
+  dev+holdout, решение, изменившиеся предсказания)
+- `state_cycle/state_{run_id}_{ts}.json` — state dump для возобновления
+- `report_cycle/summary_{run_id}_{ts}.json` — финальный отчёт при остановке
+- `log_cycle/cycle_log_{run_id}_{ts}.jsonl` — append-only лог событий
+- `manifest_cycle/manifest_{run_id}_{prompt_version}_{split}.json` — метаданные
+  запуска (backend, model checksum, inference settings) для проверки identity при resume
 
 ## Компоненты
 
@@ -202,18 +220,32 @@ duration = [50, 100, 200]
 - **prompt-store** — хранение версий промпта, активация/архивация, lineage.
 - **cycle-orchestrator** — оркестрация полного цикла (`run_cycle`).
 
-### Stage 4: Teacher refinement
+### Stage 4: Teacher refinement и transfer
 
 - **teacher-refinement** — refinement тезисов через большую модель (teacher):
   фильтрация шумных, переформулировка нестабильных, добавление пропущенных.
   Опционально включается через `use_teacher_refinement = true`.
+- **cross-task-transfer** — перенос оптимизированного промпта (base layers,
+  thesis collection, cluster centroids) с source-задачи на структурно
+  совместимую target-задачу, переформулировка task layer, очистка rules и
+  повторный прогон цикла на target-датасете. Настраивается в `[cross_task_transfer]`.
+
+### Вспомогательные компоненты
+
+- **cycle-observer** — read-only компонент: загружает артефакты завершённого
+  цикла и рендерит сводный отчёт (markdown/json). CLI: `interfaces.cli.observer`.
+  Настраивается в `[cycle_observer]`.
+- **evaluate-stop-criteria** — опциональные критерии ранней остановки цикла
+  (например, `plateau_detected`). Настраивается в `[stop_criteria]`.
 
 ## Требования
 
 - Python 3.11+
-- aiohttp
+- aiohttp (HTTP-клиент; также используется `llama_server` backend без доп. зависимостей)
 - pydantic v2
-- numpy
+- numpy, scikit-learn, sentence-transformers (эмбеддинги и кластеризация тезисов)
+- pymorphy3 / spaCy (нормализация тезисов: `ru` / `en`)
+- pyarrow, tqdm
 - torch + transformers (candidate scoring via logit-scoring, Hugging Face backend)
 - llama-cpp-python (опционально — GGUF backend; `pip install 'dynamic-prompt-core[gguf]'`)
 - доступ к llama.cpp или vLLM серверу по OpenAI-совместимому API (thesis extraction)
