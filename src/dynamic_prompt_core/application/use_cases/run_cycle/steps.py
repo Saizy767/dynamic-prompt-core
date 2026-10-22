@@ -259,49 +259,6 @@ async def run_new_on_dev(
 
 
 # --------------------------------------------------------------------------- #
-#  Step 7–8: Decide and update state
-# --------------------------------------------------------------------------- #
-def decide_and_update(
-    state: CycleState,
-    new_prompt: PromptArtifact,
-    new_artifact_path: str,
-    metrics_new: dict[str, Any],
-    metrics_active: dict[str, Any],
-    config: CycleConfig,
-    config_path: str,
-    source_candidates: list[int],
-) -> tuple[str, str, list[dict[str, Any]]]:
-    """Decide accept/rollback and update state.
-
-    Returns ``(decision, reason, changed)``.  On accept, activates the new
-    version via ``deps.prompt_repository`` and updates ``in_prompt`` flags.
-    On rollback, increments the rollback counter.
-    """
-    vc_config = VersionComparatorConfig.from_config(config_path)
-    decision, reason = decide(metrics_new, metrics_active, vc_config)
-    changed: list[dict[str, Any]] = []
-
-    if decision == "accept":
-        state.accepted_history.append(state.active_version.version)
-        state.active_version = new_prompt
-        state.active_version_path = new_artifact_path
-        state.any_accepted = True
-        accepted_cluster_ids = {str(cid) for cid in source_candidates}
-        if state.thesis_bank_path:
-            update_in_prompt_flags(state.thesis_bank_path, accepted_cluster_ids)
-    else:
-        state.rollback_history.append(
-            {
-                "cycle": state.cycle_counter + 1,
-                "version": new_prompt.version,
-                "reason": reason,
-            }
-        )
-
-    return decision, reason, changed
-
-
-# --------------------------------------------------------------------------- #
 #  Holdout evaluation (logged only)
 # --------------------------------------------------------------------------- #
 async def run_holdout(

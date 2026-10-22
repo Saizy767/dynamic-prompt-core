@@ -13,6 +13,6 @@
     }
   },
   "plugin": [
-    "list"
+    "@dietrichgebert/ponytail"
   ]
 }

@@ -277,7 +277,7 @@ def _sort_report_paths(paths: list[str]) -> list[str]:
     import re
 
     def key(p: str) -> tuple[int, str]:
-        m = re.search(r"round(\d+)_(\w+)\.json$", p)
+        m = re.search(r"cycle(\d+)_(\w+)\.json$", p)
         if m:
             return (int(m.group(1)), m.group(2))
         return (0, p)
@@ -332,10 +332,10 @@ def discover_artifacts(run_id: str, config: CycleObserverConfig) -> dict[str, li
     import glob
 
     base = config.output_dir
-    reports = glob.glob(os.path.join(base, "report_cycle", f"report_{run_id}_round*_*.json"))
+    reports = glob.glob(os.path.join(base, "report_cycle", f"report_{run_id}_cycle*_*.json"))
     decisions = glob.glob(os.path.join(base, "decision_cycle", f"decision_{run_id}_*_*.json"))
     prompt_versions = glob.glob(os.path.join(base, "prompt", f"prompt_v*_{run_id}_*.json"))
-    thesis_dumps = glob.glob(os.path.join(base, "thesis_bank", f"thesis_{run_id}_*_*.json"))
+    thesis_dumps = glob.glob(os.path.join(base, "thesis_bank", f"thesis_bank_{run_id}_*_*.json"))
     summaries = glob.glob(os.path.join(base, "report_cycle", f"summary_{run_id}_*.json"))
 
     return {
@@ -417,9 +417,9 @@ def build_round_summaries(
     summaries: list[RoundSummary] = []
     seen_rounds = set()
     for report in bundle.reports:
-        round_number = report.get("round_number")
+        round_number = report.get("cycle")
         if round_number is None:
-            log.warning("report missing round_number; skipping: %s", report)
+            log.warning("report missing cycle; skipping: %s", report)
             continue
         if round_number in seen_rounds:
             log.warning("duplicate round %s; skipping", round_number)
@@ -451,7 +451,7 @@ def build_round_summaries(
         )
 
     if bundle.reports:
-        expected = {r.get("round_number") for r in bundle.reports}
+        expected = {r.get("cycle") for r in bundle.reports}
         max_round = max(cast(set[int], expected)) if expected else 0
         for n in range(1, max_round + 1):
             if n not in seen_rounds:
@@ -646,7 +646,7 @@ def build_metric_trends(bundle: CycleArtifacts, config: CycleObserverConfig) -> 
         dev = report.get("metrics_dev_new", {}) or {}
         holdout = report.get("metrics_holdout_new", {}) or {}
         row = MetricTrendRow(
-            round_number=report.get("round_number", 0),
+            round_number=report.get("cycle", 0),
             accuracy=_metric_or_na(dev, "accuracy"),
             macro_f1=_metric_or_na(dev, "macro_f1"),
             minority_f1=_metric_or_na(dev, "minority_f1"),
@@ -667,7 +667,7 @@ def build_changed_decisions(
     """Collect changed decisions per round with truncated text (design D7)."""
     entries: list[ChangedDecisionEntry] = []
     for report in bundle.reports:
-        round_number = report.get("round_number", 0)
+        round_number = report.get("cycle", 0)
         for cd in report.get("changed_decisions", []) or []:
             text = cd.get("text", "") or ""
             entries.append(

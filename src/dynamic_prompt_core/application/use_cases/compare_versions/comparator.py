@@ -268,9 +268,9 @@ def decide(
 ) -> tuple[str, str]:
     """Decide whether to accept or roll back the new version.
 
-    Accept only when the new version's decision_metric is strictly greater
-    than the active's. Equal or lower metrics roll back. The tie_breaker_metric
-    is logged for visibility but does not influence the decision.
+    Accept when the new version's decision_metric is strictly greater than
+    the active's. When equal, accept only if the tie_breaker_metric is
+    strictly higher. Otherwise roll back.
 
     Returns (decision, reason) where decision is "accept" or "rollback".
     """
@@ -287,10 +287,16 @@ def decide(
     active_tie = _extract_metric(metrics_active, tie)
 
     if new_primary == active_primary:
+        if new_tie > active_tie:
+            return (
+                "accept",
+                f"{primary} tied ({new_primary:.4f}), {tie} improved "
+                f"({active_tie:.4f} -> {new_tie:.4f})",
+            )
         return (
             "rollback",
-            f"{primary} tied ({new_primary:.4f}), {tie} "
-            f"({active_tie:.4f} -> {new_tie:.4f}); strict improvement required",
+            f"{primary} tied ({new_primary:.4f}), {tie} did not improve "
+            f"({active_tie:.4f} -> {new_tie:.4f})",
         )
 
     return (

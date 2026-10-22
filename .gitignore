@@ -2,7 +2,7 @@
 model/
 
 # Data (datasets, intermediate state dumps)
-data/
+/data/
 
 # Logs (jsonl run logs)
 logs/

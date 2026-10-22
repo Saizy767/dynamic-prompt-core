@@ -48,7 +48,7 @@ src/dynamic_prompt_core/
     ports/           — интерфейсы (inbound/outbound: CandidateScorer, LLMClient, PromptRepository, ...)
     use_cases/       — run_cycle, run_baseline, classify_input, analyze_theses, compose_prompt,
                        select_candidates, compare_versions, refine_theses, observe_cycle,
-                       evaluate_stop_criteria, cross_task_transfer
+                       evaluate_stop_criteria
     services/        — ClassificationPolicy, metrics, clustering (чистая логика)
     schemas/         — DTO и схемы обмена между use cases
   infrastructure/    — конкретные реализации портов (LLMLogitCandidateScorer, AsyncTask, PromptStore)
@@ -220,15 +220,11 @@ duration = [50, 100, 200]
 - **prompt-store** — хранение версий промпта, активация/архивация, lineage.
 - **cycle-orchestrator** — оркестрация полного цикла (`run_cycle`).
 
-### Stage 4: Teacher refinement и transfer
+### Stage 4: Teacher refinement
 
 - **teacher-refinement** — refinement тезисов через большую модель (teacher):
   фильтрация шумных, переформулировка нестабильных, добавление пропущенных.
   Опционально включается через `use_teacher_refinement = true`.
-- **cross-task-transfer** — перенос оптимизированного промпта (base layers,
-  thesis collection, cluster centroids) с source-задачи на структурно
-  совместимую target-задачу, переформулировка task layer, очистка rules и
-  повторный прогон цикла на target-датасете. Настраивается в `[cross_task_transfer]`.
 
 ### Вспомогательные компоненты
 
