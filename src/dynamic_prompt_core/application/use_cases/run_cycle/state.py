@@ -111,6 +111,20 @@ def load_state(path: str) -> CycleState:
     )
 
 
+def _fsync_directory(directory: str) -> None:
+    """Best-effort fsync on the parent directory for crash durability."""
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
+
+
 def update_in_prompt_flags(
     thesis_bank_path: str,
     accepted_cluster_ids: set[str],
@@ -139,6 +153,7 @@ def update_in_prompt_flags(
         with open(tmp, encoding="utf-8") as vf:
             json.load(vf)
         os.replace(tmp, thesis_bank_path)
+        _fsync_directory(directory)
     finally:
         if os.path.exists(tmp):
             try:

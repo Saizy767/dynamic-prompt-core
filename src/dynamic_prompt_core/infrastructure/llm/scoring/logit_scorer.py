@@ -26,6 +26,7 @@ from dynamic_prompt_core.infrastructure.llm.scoring.errors import LLMScoringErro
 from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
     BatchedLogits,
     SequenceLogits,
+    SparseLogitVector,
 )
 
 try:
@@ -48,6 +49,13 @@ def _log_probability(logits: Sequence[float], token_id: int) -> float:
     """
     if not logits:
         raise LLMScoringError("empty logit vector")
+    if isinstance(logits, SparseLogitVector):
+        # log_sum_exp is 0 by construction (see _build_logits_from_logprobs),
+        # so log_softmax[x] = logit[x].  For a uniform/floor vector
+        # (actual_token < 0) log_softmax is -log(V) for every token.
+        if logits.actual_token < 0:
+            return -math.log(logits.vocab_size)
+        return logits.actual_logit if token_id == logits.actual_token else logits.other_logit
     if _np is not None:
         arr = _np.asarray(logits, dtype=_np.float64)
         max_val = float(_np.max(arr))

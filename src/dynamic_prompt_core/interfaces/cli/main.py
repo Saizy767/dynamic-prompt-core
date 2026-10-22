@@ -92,32 +92,9 @@ class _DatasetRepositoryAdapter:
         return records
 
     def load_artifact(self, path: str) -> Any:
-        from dynamic_prompt_core.domain.models.dataset import Dataset, Record
+        from dynamic_prompt_core.infrastructure.data import load_artifact
 
-        dataset = Dataset(seed=42, holdout_ratio=0.2, source_path=path)
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                record = Record(
-                    id=row["id"],
-                    text=row["text"],
-                    label=row["label"],
-                    ambiguous=row.get("ambiguous", False),
-                    notes=row.get("notes", ""),
-                )
-                split = row.get("split", "dev")
-                if split == "dev":
-                    dataset.dev.append(record)
-                elif split == "holdout":
-                    dataset.holdout.append(record)
-                elif split == "ambiguous":
-                    dataset.ambiguous.append(record)
-                else:
-                    dataset.dev.append(record)
-        return dataset
+        return load_artifact(path)
 
     def write_artifact(
         self,
@@ -160,21 +137,25 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
         build_candidate_scorer,
     )
-    from dynamic_prompt_core.infrastructure.storage import PromptStore, PromptStoreConfig
+    from dynamic_prompt_core.infrastructure.storage import (
+        PromptStoreConfig,
+        init_store,
+    )
     from dynamic_prompt_core.infrastructure.storage.run_repository import (
         FileRunRepository,
     )
 
+    with open(config_path, "rb") as f:
+        toml_config = tomllib.load(f)
+
     llm = AsyncTask(config_path=config_path)
     store_config = PromptStoreConfig.from_config(config_path)
-    store = PromptStore(store_config)
+    store = init_store(store_config)
     run_repo = FileRunRepository()
     normalizer = _NormalizerAdapter()
     dataset_repo = _DatasetRepositoryAdapter()
     embedding_client = _EmbeddingClientAdapter()
 
-    with open(config_path, "rb") as f:
-        toml_config = tomllib.load(f)
     model_path = toml_config.get("llm", {}).get("model_path", "model")
     scorer = build_candidate_scorer(
         scorer_backend_config_from_toml(toml_config, default_model_path=model_path)
@@ -187,8 +168,6 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
 
     teacher_llm_client = None
     try:
-        with open(config_path, "rb") as f:
-            toml_config = tomllib.load(f)
         t = toml_config.get("teacher", {})
         if t.get("endpoint"):
             from dynamic_prompt_core.infrastructure.llm.teacher_client import TeacherClient
@@ -210,8 +189,6 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
 
     stop_criteria_deps = None
     try:
-        with open(config_path, "rb") as f:
-            toml_config = tomllib.load(f)
         if "stop_criteria" in toml_config:
             from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.deps import (
                 EvaluateStopCriteriaDeps,
@@ -380,6 +357,11 @@ async def main(argv: list[str] | None = None) -> int:
         close_fn = getattr(deps.candidate_scorer, "aclose", None)
         if close_fn is not None:
             await close_fn()
+        from dynamic_prompt_core.infrastructure.llm.teacher_client import (
+            close_session,
+        )
+
+        await close_session()
 
 
 def cli_entry() -> None:

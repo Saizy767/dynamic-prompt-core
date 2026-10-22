@@ -130,6 +130,95 @@ def test_run_cycle_step_executes_steps_and_writes_report(
     assert updated.latest_report_path == "report.json"
 
 
+def test_run_cycle_step_persists_accepted_version_to_store(
+    build_mock_deps,
+    cycle_config,
+    tmp_output_dir,
+):
+    """On accept, run_cycle_step calls prompt_repository.save then activate."""
+    from dataclasses import replace
+
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
+
+    deps = build_mock_deps()
+
+    saved_calls: list[dict] = []
+    activated: list[int] = []
+
+    class _TrackingRepo:
+        def save(self, prompt_version_dict, reason="composed", base_version=None):
+            saved_calls.append(prompt_version_dict)
+            return {"version": 7, "text": prompt_version_dict["text"]}
+
+        def activate(self, version_number):
+            activated.append(version_number)
+            return {"version": version_number}
+
+        def get_active(self):
+            raise KeyError("no active version")
+
+        def get(self, version_number):
+            return {}
+
+        def list_versions(self):
+            return []
+
+        def lineage(self, version_number):
+            return []
+
+    deps = replace(deps, prompt_repository=_TrackingRepo())
+
+    state = CycleState(run_id="test-run")
+    log_path = os.path.join(tmp_output_dir, "cycle_log.jsonl")
+    os.makedirs(tmp_output_dir, exist_ok=True)
+
+    mock_runner = AsyncMock()
+    mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
+    metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
+
+    prompt_v1 = _make_prompt_with_rules("classify-v1", _v0_rules() + ["rule-1"])
+    mock_pc_config = MagicMock(max_rules=10)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
+        stack.enter_context(patch(f"{STEPS}.compute_dev_metrics", return_value=metrics))
+        stack.enter_context(
+            patch(
+                f"{STEPS}.update_thesis_collection",
+                return_value=("thesis.json", "clusters.json"),
+            )
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.select_candidates", return_value=("cands.json", [{"cluster_id": 1}]))
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.compose_new_version",
+                new_callable=AsyncMock,
+                return_value=(prompt_v1, "prompt_v1.json", [1]),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.run_new_on_dev", new_callable=AsyncMock, return_value="new_results.jsonl"
+            )
+        )
+        stack.enter_context(patch(f"{STEPS}.decide", return_value=("accept", "improved")))
+        stack.enter_context(
+            patch(f"{STEPS}.run_holdout", new_callable=AsyncMock, return_value={"accuracy": 0.5})
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.PromptComposerConfig.from_config", return_value=mock_pc_config)
+        )
+        stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
+        stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
+
+        asyncio.run(run_cycle_step(state, deps, cycle_config, "config.toml", log_path))
+
+    assert len(saved_calls) == 1
+    assert activated == [7]
+
+
 def test_run_active_on_dev_threads_scorer_policy_candidates(build_mock_deps):
     """run_active_on_dev passes scorer, policy, and candidates from deps to BaselineRunner."""
     from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig

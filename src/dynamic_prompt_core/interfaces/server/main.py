@@ -58,7 +58,7 @@ async def main(argv: list[str] | None = None) -> int:
         loop.add_signal_handler(sig, _signal_handler, sig)
 
     try:
-        endpoint = launcher.start()
+        endpoint = await asyncio.to_thread(launcher.start)
         log.info("Server ready at %s (PID %d). Press Ctrl+C to stop.", endpoint, launcher.pid)
         await stop_event.wait()
     except VllmNotSupportedError as exc:

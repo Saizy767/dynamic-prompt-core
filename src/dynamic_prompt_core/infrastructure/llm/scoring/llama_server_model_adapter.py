@@ -32,6 +32,7 @@ from dynamic_prompt_core.infrastructure.llm.scoring.errors import LLMScoringErro
 from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
     BatchedLogits,
     SequenceLogits,
+    SparseLogitVector,
 )
 
 log = logging.getLogger(__name__)
@@ -46,8 +47,8 @@ def _build_logits_from_logprobs(
     token_logprobs: list[float | None],
     token_ids: list[int],
     vocab_size: int,
-) -> list[list[float]]:
-    """Construct a logit vector per position from token log probabilities.
+) -> list[SparseLogitVector]:
+    """Construct a sparse logit vector per position from token log probabilities.
 
     In a causal LM, logits at position ``i`` predict the token at position
     ``i + 1``.  ``token_logprobs[i + 1]`` is the log-probability of
@@ -74,14 +75,15 @@ def _build_logits_from_logprobs(
     one.  In that case ``LLMScoringError`` is raised rather than silently
     filling the logit vector with a constant floor, which would collapse all
     candidates to equal probability.
+
+    Returns ``SparseLogitVector`` per position to avoid materializing a full
+    vocab-size list when only one entry's ``log_softmax`` is needed.
     """
     seq_len = len(token_ids)
-    result: list[list[float]] = []
+    result: list[SparseLogitVector] = []
     missing_count = 0
 
     for i in range(seq_len):
-        logit = [_LOGIT_FLOOR] * vocab_size
-
         next_idx = i + 1
         if next_idx < len(token_logprobs) and next_idx < len(token_ids):
             raw_lp = token_logprobs[next_idx]
@@ -99,25 +101,29 @@ def _build_logits_from_logprobs(
                     f"token_logprobs[{next_idx}] is NaN or infinite: {lp}"
                 )
             next_token = token_ids[next_idx]
+            if next_token < 0:
+                result.append(
+                    SparseLogitVector(-1, _LOGIT_FLOOR, _LOGIT_FLOOR, vocab_size)
+                )
+                continue
             if next_token >= vocab_size:
                 vocab_size = next_token + 1
-                logit.extend([_LOGIT_FLOOR] * (next_token + 1 - len(logit)))
-            if 0 <= next_token < len(logit):
-                effective_vocab = len(logit)
-                if effective_vocab > 1:
-                    prob = math.exp(lp) if lp < 0.0 else 1.0
-                    remaining = 1.0 - prob
-                    if remaining > 0.0:
-                        other_logit = (
-                            math.log(remaining)
-                            - math.log(effective_vocab - 1)
-                        )
-                    else:
-                        other_logit = float("-inf")
-                    logit = [other_logit] * effective_vocab
-                logit[next_token] = lp
-
-        result.append(logit)
+            if vocab_size > 1:
+                prob = math.exp(lp) if lp < 0.0 else 1.0
+                remaining = 1.0 - prob
+                if remaining > 0.0:
+                    other_logit = math.log(remaining) - math.log(vocab_size - 1)
+                else:
+                    other_logit = float("-inf")
+            else:
+                other_logit = lp
+            result.append(
+                SparseLogitVector(next_token, lp, other_logit, vocab_size)
+            )
+        else:
+            result.append(
+                SparseLogitVector(-1, _LOGIT_FLOOR, _LOGIT_FLOOR, vocab_size)
+            )
 
     if missing_count > 0:
         log.warning(
@@ -132,7 +138,7 @@ def _build_logits_from_logprobs(
 def _parse_v1_logprobs(
     body: dict[str, Any],
     token_ids: list[int],
-) -> list[list[float]]:
+) -> list[SparseLogitVector]:
     """Parse the /v1/completions response and build logits from token_logprobs.
 
     Verifies that the token IDs returned by the API match the original
@@ -230,7 +236,7 @@ def _extract_api_token_ids(logprobs_data: dict[str, Any]) -> list[int] | None:
 def _parse_native_logprobs(
     body: dict[str, Any],
     token_ids: list[int],
-) -> list[list[float]]:
+) -> list[SparseLogitVector]:
     """Parse the native /completion response with prompt_logprobs.
 
     The native endpoint returns:
@@ -466,7 +472,7 @@ class LlamaServerCausalLMAdapter:
         if self._vocab_size == 0 and per_position:
             self._vocab_size = len(per_position[0])
 
-        return SequenceLogits(logits=tuple(tuple(p) for p in per_position))
+        return SequenceLogits(logits=tuple(per_position))
 
     async def forward_batch(
         self,
@@ -630,7 +636,7 @@ class LlamaServerCausalLMAdapter:
         if self._vocab_size == 0 and per_position:
             self._vocab_size = len(per_position[0])
 
-        return SequenceLogits(logits=tuple(tuple(p) for p in per_position))
+        return SequenceLogits(logits=tuple(per_position))
 
     async def _safe_close_session(self) -> None:
         if self._session is not None and not self._session.closed:

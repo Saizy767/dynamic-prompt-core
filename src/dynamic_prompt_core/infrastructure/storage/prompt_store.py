@@ -374,6 +374,7 @@ class PromptStore:
                     next_versions[k] = {**rec, "active": False, "archived": True}
                     previous_version = rec["version"]
 
+            _validate_document(next_versions)
             self._flush(next_versions)
             self._versions = next_versions
             self._log("activate", version_number, {"previous": previous_version})

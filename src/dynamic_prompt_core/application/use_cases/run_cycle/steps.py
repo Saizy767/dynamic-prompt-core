@@ -572,6 +572,23 @@ async def run_cycle_step(
     state.active_version = best_prompt
     state.active_version_path = best_artifact_path
 
+    # Persist the accepted version so load_initial_state recovers it next run.
+    if state.any_accepted:
+        try:
+            saved = deps.prompt_repository.save(
+                {
+                    "text": best_prompt.text,
+                    "rules": list(best_prompt.layers.rules)
+                    if best_prompt.layers
+                    else [],
+                    "source_candidates": accumulated_source_candidates,
+                },
+                reason="accepted",
+            )
+            deps.prompt_repository.activate(saved["version"])
+        except Exception as exc:
+            log.warning("failed to persist accepted prompt to store: %s", exc)
+
     # Update histories
     if state.any_accepted:
         state.accepted_history.append(active_version_at_start)
