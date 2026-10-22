@@ -176,3 +176,112 @@ def test_valid_stop_reasons_extended():
     assert "max_cycles_reached" in VALID_STOP_REASONS
     assert "no_improvement" in VALID_STOP_REASONS
     assert "unrecoverable_error" in VALID_STOP_REASONS
+
+
+def test_consecutive_rollbacks_empty():
+    from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
+        _consecutive_rollbacks,
+    )
+
+    assert _consecutive_rollbacks([]) == 0
+
+
+def test_consecutive_rollbacks_after_accept():
+    from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
+        _consecutive_rollbacks,
+    )
+
+    assert _consecutive_rollbacks(["accept"]) == 0
+    assert _consecutive_rollbacks(["rollback", "accept"]) == 0
+    assert _consecutive_rollbacks(["accept", "rollback", "accept"]) == 0
+
+
+def test_consecutive_rollbacks_streak():
+    from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
+        _consecutive_rollbacks,
+    )
+
+    assert _consecutive_rollbacks(["rollback"]) == 1
+    assert _consecutive_rollbacks(["accept", "rollback"]) == 1
+    assert _consecutive_rollbacks(["accept", "rollback", "rollback"]) == 2
+    assert _consecutive_rollbacks(["rollback", "rollback", "rollback"]) == 3
+
+
+async def test_rollback_streak_does_not_trigger_below_limit():
+    """One consecutive rollback with max=2 should not trigger rollback_streak."""
+    from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.config import (
+        StopCriteriaConfig,
+    )
+    from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.deps import (
+        EvaluateStopCriteriaDeps,
+    )
+    from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.evaluate import (
+        evaluate_stop_criteria,
+    )
+    from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
+        _consecutive_rollbacks,
+    )
+
+    decision_history = ["rollback"]
+    rollback_counter = _consecutive_rollbacks(decision_history)
+    assert rollback_counter == 1
+
+    cfg = StopCriteriaConfig(max_consecutive_rollbacks=2)
+    ctx = StopEvaluationContext(
+        round_counter=1,
+        rollback_counter=rollback_counter,
+        max_consecutive_rollbacks=2,
+        candidate_queue_size=1,
+        new_candidates_found=0,
+        metric_history=[{"accuracy": 0.5, "macro_f1": 0.5, "minority_f1": 0.5}],
+        decision_history=decision_history,
+        rule_set_history=[frozenset()],
+        total_teacher_tokens=0,
+        run_id="test-run",
+        config=cfg,
+    )
+    deps = EvaluateStopCriteriaDeps(run_repository=_StubRunRepository())
+    decision = await evaluate_stop_criteria(deps, ctx)
+    assert "rollback_streak" not in decision.triggered_criteria
+
+
+async def test_rollback_streak_triggers_at_limit():
+    """Two consecutive rollbacks with max=2 should trigger rollback_streak."""
+    from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.config import (
+        StopCriteriaConfig,
+    )
+    from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.deps import (
+        EvaluateStopCriteriaDeps,
+    )
+    from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.evaluate import (
+        evaluate_stop_criteria,
+    )
+    from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
+        _consecutive_rollbacks,
+    )
+
+    decision_history = ["accept", "rollback", "rollback"]
+    rollback_counter = _consecutive_rollbacks(decision_history)
+    assert rollback_counter == 2
+
+    cfg = StopCriteriaConfig(max_consecutive_rollbacks=2)
+    ctx = StopEvaluationContext(
+        round_counter=3,
+        rollback_counter=rollback_counter,
+        max_consecutive_rollbacks=2,
+        candidate_queue_size=1,
+        new_candidates_found=0,
+        metric_history=[
+            {"accuracy": 0.5, "macro_f1": 0.5, "minority_f1": 0.5},
+            {"accuracy": 0.5, "macro_f1": 0.5, "minority_f1": 0.5},
+            {"accuracy": 0.5, "macro_f1": 0.5, "minority_f1": 0.5},
+        ],
+        decision_history=decision_history,
+        rule_set_history=[frozenset(), frozenset(), frozenset()],
+        total_teacher_tokens=0,
+        run_id="test-run",
+        config=cfg,
+    )
+    deps = EvaluateStopCriteriaDeps(run_repository=_StubRunRepository())
+    decision = await evaluate_stop_criteria(deps, ctx)
+    assert "rollback_streak" in decision.triggered_criteria

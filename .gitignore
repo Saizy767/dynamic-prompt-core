@@ -11,6 +11,7 @@ logs/
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.zip
 .venv/
 venv/
 env/

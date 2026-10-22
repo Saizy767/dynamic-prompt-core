@@ -441,3 +441,65 @@ candidate queue is empty at the start of accumulation.
   degrades
 - **THEN** the cycle finalizes the best and the process continues to the
   next cycle (not `no_improvement`)
+
+### Requirement: Consecutive rollback count in stop-criteria context
+
+When the orchestrator builds `StopEvaluationContext` for the stop-criteria
+evaluator, it SHALL compute `rollback_counter` as the number of trailing
+`"rollback"` entries in `decision_history` (the consecutive rollback streak),
+not a hardcoded zero. It SHALL pass `max_consecutive_rollbacks` from
+`StopCriteriaConfig` (default 2), not a hardcoded zero.
+
+#### Scenario: Zero consecutive rollbacks after accept
+- **WHEN** the last decision in `decision_history` is `"accept"`
+- **THEN** `rollback_counter` in `StopEvaluationContext` is 0
+
+#### Scenario: Consecutive rollback streak counted
+- **WHEN** `decision_history` is `["accept", "rollback", "rollback"]`
+- **THEN** `rollback_counter` in `StopEvaluationContext` is 2
+
+#### Scenario: Max consecutive rollbacks from config
+- **WHEN** `StopCriteriaConfig` sets `max_consecutive_rollbacks=3`
+- **THEN** `max_consecutive_rollbacks` in `StopEvaluationContext` is 3
+
+#### Scenario: Default max consecutive rollbacks
+- **WHEN** `StopCriteriaConfig` does not set `max_consecutive_rollbacks`
+- **THEN** `max_consecutive_rollbacks` in `StopEvaluationContext` is 2
+
+#### Scenario: Cycle continues below rollback limit
+- **WHEN** the consecutive rollback count is 1 and
+  `max_consecutive_rollbacks` is 2
+- **THEN** the `rollback_streak` criterion does not trigger and the cycle
+  continues
+
+### Requirement: Rollback count in per-cycle report
+
+The per-cycle report SHALL include the actual total rollback count
+(`len(state.rollback_history)`), not a hardcoded zero.
+
+#### Scenario: Report reflects rollback count
+- **WHEN** a cycle completes with 3 entries in `state.rollback_history`
+- **THEN** the report's `rollback_counter` field is 3
+
+### Requirement: Atomic thesis bank persistence
+
+When `update_in_prompt_flags` writes the updated thesis bank, it SHALL do so
+atomically: the existing file SHALL remain untouched until the new content is
+fully serialized, fsynced, and read-back validated as parseable JSON. The
+replacement SHALL use an atomic rename (`os.replace`). If any step fails, the
+original file SHALL be left intact and the temporary file SHALL be removed.
+
+#### Scenario: Successful update replaces file
+- **WHEN** `update_in_prompt_flags` writes a valid updated thesis bank
+- **THEN** the file at `thesis_bank_path` contains the new content and the
+  old content is fully replaced
+
+#### Scenario: Original file preserved on write failure
+- **WHEN** the write fails after the original file exists
+- **THEN** the original file at `thesis_bank_path` is unchanged and no
+  temporary file remains in the directory
+
+#### Scenario: Temp file cleaned up on failure
+- **WHEN** an exception occurs during serialization or validation
+- **THEN** the temporary file is removed and does not persist in the
+  thesis bank's directory

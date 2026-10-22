@@ -14,6 +14,7 @@ DEFAULT_MIN_IMPROVEMENT = 0.01
 DEFAULT_DEGRADATION_WINDOW = 3
 DEFAULT_STAGNATION_WINDOW = 3
 DEFAULT_MAX_TOTAL_ROUNDS = 10
+DEFAULT_MAX_CONSECUTIVE_ROLLBACKS = 2
 DEFAULT_DECISION_METRIC = "macro_f1"
 
 ALL_CRITERIA: tuple[str, ...] = (
@@ -40,6 +41,7 @@ class StopCriteriaConfig:
     stagnation_window: int = DEFAULT_STAGNATION_WINDOW
     max_total_rounds: int = DEFAULT_MAX_TOTAL_ROUNDS
     max_total_tokens: int | None = None
+    max_consecutive_rollbacks: int = DEFAULT_MAX_CONSECUTIVE_ROLLBACKS
     enabled_criteria: list[str] | None = None
     decision_metric: str = DEFAULT_DECISION_METRIC
 
@@ -73,6 +75,12 @@ class StopCriteriaConfig:
                 s.get("max_total_rounds", DEFAULT_MAX_TOTAL_ROUNDS)
             ),
             max_total_tokens=max_total_tokens,
+            max_consecutive_rollbacks=int(
+                s.get(
+                    "max_consecutive_rollbacks",
+                    DEFAULT_MAX_CONSECUTIVE_ROLLBACKS,
+                )
+            ),
             enabled_criteria=enabled_criteria,
             decision_metric=s.get("decision_metric", DEFAULT_DECISION_METRIC),
         )

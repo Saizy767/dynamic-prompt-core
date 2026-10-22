@@ -126,5 +126,22 @@ def update_in_prompt_flags(
     for _norm, entry in theses.items():
         cid = str(entry.get("cluster_id", ""))
         entry["in_prompt"] = cid in accepted_cluster_ids
-    with open(thesis_bank_path, "w", encoding="utf-8") as f:
-        json.dump(bank, f, ensure_ascii=False, indent=2)
+
+    directory = os.path.dirname(thesis_bank_path) or "."
+    tmp = os.path.join(
+        directory, f".{os.path.basename(thesis_bank_path)}.tmp.{os.getpid()}"
+    )
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(bank, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        with open(tmp, encoding="utf-8") as vf:
+            json.load(vf)
+        os.replace(tmp, thesis_bank_path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass

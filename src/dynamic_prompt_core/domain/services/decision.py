@@ -62,7 +62,7 @@ def decide(
                 f"({active_tie:.4f} -> {new_tie:.4f})",
             )
         return (
-            "accept",
+            "rollback",
             f"{primary} tied ({new_primary:.4f}), {tie} did not improve "
             f"({active_tie:.4f} -> {new_tie:.4f})",
         )

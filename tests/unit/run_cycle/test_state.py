@@ -89,6 +89,38 @@ def test_update_in_prompt_flags_sets_correct_values(tmp_path):
     assert updated["theses"]["t3"]["in_prompt"] is True
 
 
+def test_update_in_prompt_flags_preserves_original_on_failure(tmp_path, monkeypatch):
+    """Original thesis bank is unchanged when the write fails."""
+
+    import os
+
+    bank = {
+        "theses": {"t1": {"cluster_id": 1, "in_prompt": False, "text_raw": "t1"}},
+        "clusters": {},
+    }
+    bank_path = str(tmp_path / "thesis_bank.json")
+    with open(bank_path, "w") as f:
+        json.dump(bank, f)
+    original_content = open(bank_path).read()
+
+    def _raising_dump(*args, **kwargs):
+        raise RuntimeError("simulated write failure")
+
+    monkeypatch.setattr(
+        "dynamic_prompt_core.application.use_cases.run_cycle.state.json.dump",
+        _raising_dump,
+    )
+
+    try:
+        update_in_prompt_flags(bank_path, {"1"})
+    except RuntimeError:
+        pass
+
+    assert open(bank_path).read() == original_content
+    temp_files = [f for f in os.listdir(str(tmp_path)) if ".tmp." in f]
+    assert temp_files == []
+
+
 def test_resume_from_dumped_state_preserves_fields(tmp_path, mock_run_repository):
     """Resume from a dumped state at cycle 3 preserves all fields."""
     state = CycleState(

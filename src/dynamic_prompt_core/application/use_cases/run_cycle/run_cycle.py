@@ -35,6 +35,17 @@ from dynamic_prompt_core.domain.prompts.fixed import CLASSIFICATION_PROMPT_V0
 log = logging.getLogger(__name__)
 
 
+def _consecutive_rollbacks(decision_history: list[str]) -> int:
+    """Count trailing ``"rollback"`` entries in decision_history."""
+    count = 0
+    for entry in reversed(decision_history):
+        if entry == "rollback":
+            count += 1
+        else:
+            break
+    return count
+
+
 @dataclass(frozen=True)
 class RunCycleResult:
     """Result of a run_cycle execution."""
@@ -269,8 +280,10 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
                 stop_config = config.stop_criteria_config
                 ctx = StopEvaluationContext(
                     round_counter=state.cycle_counter,
-                    rollback_counter=0,
-                    max_consecutive_rollbacks=0,
+                    rollback_counter=_consecutive_rollbacks(decision_history),
+                    max_consecutive_rollbacks=getattr(
+                        stop_config, "max_consecutive_rollbacks", 2
+                    ),
                     candidate_queue_size=len(state.candidate_queue),
                     new_candidates_found=state.last_cycle_new_candidates,
                     metric_history=list(metric_history),

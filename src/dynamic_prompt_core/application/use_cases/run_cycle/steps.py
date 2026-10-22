@@ -644,7 +644,7 @@ async def run_cycle_step(
         metrics_dev_new={},
         metrics_holdout_active=metrics_holdout_active,
         metrics_holdout_new=best_holdout_metrics,
-        rollback_counter=0,
+        rollback_counter=len(state.rollback_history),
         changed_decisions=[],
         next_action=next_action,
         run_id=state.run_id,
