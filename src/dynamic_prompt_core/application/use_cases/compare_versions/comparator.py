@@ -274,6 +274,9 @@ def decide(
 
     Returns (decision, reason) where decision is "accept" or "rollback".
     """
+    if metrics_new.get("f1") is None or metrics_active.get("f1") is None:
+        return "rollback", "holdout metrics unavailable (f1 missing or None)"
+
     primary = config.decision_metric
     tie = config.tie_breaker_metric
 

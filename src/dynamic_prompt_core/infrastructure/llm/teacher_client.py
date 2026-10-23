@@ -114,6 +114,7 @@ class TeacherClient:
         filter_noisy: bool = True,
         filter_interpretive: bool = True,
         allow_additions: bool = True,
+        tokenizer_path: str | None = None,
     ) -> None:
         self._task = AsyncTask(
             config_path=config_path,
@@ -123,6 +124,7 @@ class TeacherClient:
             temperature=temperature,
             max_tokens=max_tokens,
             truncate_tokens=2000,
+            tokenizer_path=tokenizer_path,
         )
         self._task._served_model_name = model_name
         self._max_tokens = max_tokens

@@ -183,6 +183,7 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
                 filter_noisy=bool(t.get("filter_noisy", True)),
                 filter_interpretive=bool(t.get("filter_interpretive", True)),
                 allow_additions=bool(t.get("allow_additions", True)),
+                tokenizer_path=t.get("model_path"),
             )
     except Exception as exc:
         log.debug("teacher client not configured: %s", exc)
@@ -245,6 +246,7 @@ def build_refine_deps(config_path: str) -> RefineThesesDeps:
         filter_noisy=bool(t.get("filter_noisy", True)),
         filter_interpretive=bool(t.get("filter_interpretive", True)),
         allow_additions=bool(t.get("allow_additions", True)),
+        tokenizer_path=t.get("model_path"),
     )
     run_repo = FileRunRepository()
 

@@ -48,7 +48,6 @@ def test_observer_finds_report_and_reads_cycle_number(tmp_path, mock_run_reposit
         final_dev_metrics={"accuracy": 0.6},
         final_holdout_metrics={},
         stop_reason="max_cycles_reached",
-        all_changed_decisions=[],
         run_id=run_id,
         run_repository=mock_run_repository,
         output_dir=output_dir,

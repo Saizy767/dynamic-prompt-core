@@ -162,7 +162,6 @@ class ChangedDecisionEntry:
 @dataclass
 class ChangedDecisions:
     entries: list[ChangedDecisionEntry] = field(default_factory=list)
-    cycle_wide: list[dict[str, Any]] = field(default_factory=list)
     message: str = ""
 
 
@@ -679,12 +678,11 @@ def build_changed_decisions(
                 )
             )
 
-    cycle_wide = (bundle.summary or {}).get("all_changed_decisions", []) or []
-    if not entries and not cycle_wide:
+    if not entries:
         message = "No predictions changed between versions."
     else:
         message = f"{len(entries)} changed prediction(s) across rounds."
-    return ChangedDecisions(entries=entries, cycle_wide=cycle_wide, message=message)
+    return ChangedDecisions(entries=entries, message=message)
 
 
 def build_thesis_summary(

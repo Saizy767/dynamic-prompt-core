@@ -64,8 +64,8 @@ class TestLlamaServerBatchTokenizerAdapter:
         prefix_tokens = [1, 2, 3]
         adapter, mock = self._make_adapter_with_mock(
             [
-                _MockResponse(200, {"tokens": full_tokens}),
                 _MockResponse(200, {"tokens": prefix_tokens}),
+                _MockResponse(200, {"tokens": full_tokens}),
             ]
         )
         result = await adapter.encode_batch(["hello "], ["world"])
@@ -78,10 +78,10 @@ class TestLlamaServerBatchTokenizerAdapter:
     async def test_encode_batch_multiple_items_with_padding(self) -> None:
         adapter, _ = self._make_adapter_with_mock(
             [
-                _MockResponse(200, {"tokens": [1, 2, 3]}),
                 _MockResponse(200, {"tokens": [1, 2]}),
-                _MockResponse(200, {"tokens": [4, 5, 6, 7, 8]}),
                 _MockResponse(200, {"tokens": [4, 5, 6]}),
+                _MockResponse(200, {"tokens": [1, 2, 3]}),
+                _MockResponse(200, {"tokens": [4, 5, 6, 7, 8]}),
             ]
         )
         result = await adapter.encode_batch(
@@ -100,19 +100,19 @@ class TestLlamaServerBatchTokenizerAdapter:
     async def test_candidate_value_sent_verbatim(self) -> None:
         adapter, mock = self._make_adapter_with_mock(
             [
-                _MockResponse(200, {"tokens": [1, 2]}),
                 _MockResponse(200, {"tokens": [1]}),
+                _MockResponse(200, {"tokens": [1, 2]}),
             ]
         )
         await adapter.encode_batch(["prefix "], ["  spaced  "])
-        full_call = mock.post_calls[0]["json"]
+        full_call = mock.post_calls[1]["json"]
         assert full_call["content"] == "prefix   spaced  "
 
     async def test_add_special_false_in_request(self) -> None:
         adapter, mock = self._make_adapter_with_mock(
             [
-                _MockResponse(200, {"tokens": [1, 2]}),
                 _MockResponse(200, {"tokens": [1]}),
+                _MockResponse(200, {"tokens": [1, 2]}),
             ]
         )
         await adapter.encode_batch(["a"], ["b"])

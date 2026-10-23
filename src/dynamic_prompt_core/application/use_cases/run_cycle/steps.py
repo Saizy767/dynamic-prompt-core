@@ -431,7 +431,6 @@ async def run_cycle_step(
     decision = "rollback"
     reason = ""
     new_version = ""
-    attempts: list[dict[str, Any]] = []
 
     pc_config = PromptComposerConfig.from_config(config_path)
 
@@ -509,15 +508,6 @@ async def run_cycle_step(
             best_summary["accuracy"],
             best_summary["macro_f1"],
             best_summary["minority_f1"],
-        )
-
-        attempts.append(
-            {
-                "version": new_version,
-                "cluster_id": candidate.get("cluster_id"),
-                "holdout_metric": _extract_metric_summary(holdout_metrics_new),
-                "decision": decision,
-            }
         )
 
         log_event(

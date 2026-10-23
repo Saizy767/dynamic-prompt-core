@@ -79,6 +79,7 @@ class AsyncTask:
         retry_jitter: float = 0.5,
         log_path: str | None = None,
         run_id: str = "smoke",
+        tokenizer_path: str | None = None,
     ) -> None:
         config_path = os.path.abspath(config_path)
 
@@ -120,7 +121,7 @@ class AsyncTask:
         self._adapter = _ADAPTERS[self._backend](self._structured_mode)
         self._chat_url = self._adapter.chat_url(self._endpoint)
 
-        model_path = self._config["llm"]["model_path"]
+        model_path = tokenizer_path or self._config["llm"]["model_path"]
         try:
             self._tokenizer = AutoTokenizer.from_pretrained(
                 model_path, trust_remote_code=True

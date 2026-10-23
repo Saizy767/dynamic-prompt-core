@@ -263,6 +263,47 @@ async def test_runner_skip_extraction() -> None:
     assert row.classify_status == "ok"
 
 
+@pytest.mark.asyncio
+async def test_stats_no_double_count() -> None:
+    """ok and classify_ok are separate; a fully-successful example counts each once."""
+    from dynamic_prompt_core.application.schemas.thesis import ThesisExtraction
+
+    candidates = _make_candidates()
+    scorer = AsyncMock()
+    scorer.score.return_value = [
+        Judgment(candidate=candidates[0], score=-1.5),
+        Judgment(candidate=candidates[1], score=-0.3),
+    ]
+    task = MagicMock()
+    task.extract_theses_detailed = AsyncMock(
+        return_value=CallResult(
+            parsed=ThesisExtraction(theses=["a b", "c d", "e f"]),
+            raw_content=None,
+            latency_ms=1.0,
+            parse_status=None,
+            status=ResponseStatus.OK,
+        )
+    )
+
+    runner = BaselineRunner(
+        task=task,
+        config=RunnerConfig(),
+        split="dev",
+        scorer=scorer,
+        policy=ArgmaxClassificationPolicy(),
+        candidates=candidates,
+    )
+    runner._checkpoint_write = AsyncMock()
+    runner._semaphore = asyncio.Semaphore(1)
+
+    example = _FakeRecord(id=1, text="some text", label=1)
+    results: list[ResultRow | None] = [None]
+    await runner._process_example(MagicMock(), example, 0, results)
+
+    assert runner._stats["ok"] == 1
+    assert runner._stats["classify_ok"] == 1
+
+
 # --------------------------------------------------------------------------- #
 #  Rule extraction tests
 # --------------------------------------------------------------------------- #

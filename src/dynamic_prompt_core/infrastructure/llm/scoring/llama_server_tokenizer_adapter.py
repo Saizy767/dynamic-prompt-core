@@ -163,26 +163,34 @@ class LlamaServerBatchTokenizerAdapter:
                 candidate_token_ids=[],
             )
 
-        async def _encode_pair(
-            prefix: str, candidate: str
-        ) -> tuple[list[int], int, list[int]]:
-            full_ids = await self._tokenize(prefix + candidate)
-            prefix_ids = await self._tokenize(prefix)
-
-            if full_ids[: len(prefix_ids)] == prefix_ids:
-                prefix_count = len(prefix_ids)
-                candidate_ids = full_ids[prefix_count:]
-            else:
-                raise LLMScoringError(
-                    f"tokenization boundary mismatch: the prefix token "
-                    f"sequence is not an exact prefix of the full token "
-                    f"sequence (prompt length {len(prefix + candidate)}); "
-                    f"the server tokenizer merges tokens across the "
-                    f"prefix/candidate boundary"
-                )
-            return full_ids, prefix_count, candidate_ids
-
         try:
+            unique_prefixes = dict.fromkeys(prefixes)
+            prefix_token_cache = await asyncio.gather(
+                *(self._tokenize(p) for p in unique_prefixes)
+            )
+            prefix_ids_by_prefix = dict(
+                zip(unique_prefixes, prefix_token_cache)
+            )
+
+            async def _encode_pair(
+                prefix: str, candidate: str
+            ) -> tuple[list[int], int, list[int]]:
+                full_ids = await self._tokenize(prefix + candidate)
+                prefix_ids = prefix_ids_by_prefix[prefix]
+
+                if full_ids[: len(prefix_ids)] == prefix_ids:
+                    prefix_count = len(prefix_ids)
+                    candidate_ids = full_ids[prefix_count:]
+                else:
+                    raise LLMScoringError(
+                        f"tokenization boundary mismatch: the prefix token "
+                        f"sequence is not an exact prefix of the full token "
+                        f"sequence (prompt length {len(prefix + candidate)}); "
+                        f"the server tokenizer merges tokens across the "
+                        f"prefix/candidate boundary"
+                    )
+                return full_ids, prefix_count, candidate_ids
+
             results = await asyncio.gather(
                 *(
                     _encode_pair(prefix, candidate)

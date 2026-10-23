@@ -176,6 +176,11 @@ def test_valid_stop_reasons_extended():
     assert "max_cycles_reached" in VALID_STOP_REASONS
     assert "no_improvement" in VALID_STOP_REASONS
     assert "unrecoverable_error" in VALID_STOP_REASONS
+    assert "budget_exhausted" in VALID_STOP_REASONS
+    assert "no_candidates_available" in VALID_STOP_REASONS
+    assert "metric_degradation" in VALID_STOP_REASONS
+    assert "rule_stagnation" in VALID_STOP_REASONS
+    assert "rollback_streak" in VALID_STOP_REASONS
 
 
 def test_consecutive_rollbacks_empty():

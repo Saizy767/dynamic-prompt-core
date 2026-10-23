@@ -296,6 +296,10 @@ output_dir = "data/results"
 endpoint = "http://127.0.0.1:8081/v1"
 # Model name the teacher server presents (sent as the "model" field). Required.
 model_name = "qwen2.5-7b-instruct"
+# Path to the teacher model's tokenizer (AutoTokenizer.from_pretrained). Used
+# for input truncation. When empty, falls back to [llm].model_path — correct
+# only when both models share a tokenizer.
+model_path = ""
 # Sampling temperature for teacher calls (0 = deterministic).
 temperature = 0.0
 # Max tokens for the teacher response (the RefinementPlan JSON).

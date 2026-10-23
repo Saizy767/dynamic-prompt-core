@@ -5,6 +5,8 @@ import logging
 import os
 import signal
 import subprocess
+import threading
+from collections import deque
 from typing import Any
 
 from dynamic_prompt_core.infrastructure.server.argv import build_argv
@@ -20,8 +22,10 @@ class ServerLauncher:
         self._cfg = llm_cfg
         self._backend = llm_cfg["backend"]
         self.endpoint = f"http://{llm_cfg['host']}:{llm_cfg['port']}/v1"
-        self._proc: subprocess.Popen[bytes] | None = None
+        self._proc: subprocess.Popen[str] | None = None
         self._stop_grace = 10.0
+        self._log_lines: deque[str] = deque(maxlen=50)
+        self._reader: threading.Thread | None = None
 
     @property
     def pid(self) -> int | None:
@@ -36,19 +40,39 @@ class ServerLauncher:
             else self._cfg.get("startup_timeout", 60)
         )
         log.info("Starting server: %s", " ".join(argv))
-        self._proc = subprocess.Popen(argv, start_new_session=True)
+        self._proc = subprocess.Popen(
+            argv,
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self._reader = threading.Thread(target=self._drain_output, daemon=True)
+        self._reader.start()
         log.info(
             "Server PID %d, waiting for readiness (timeout=%ss)",
             self._proc.pid, timeout,
         )
         if not wait_for_ready(self.endpoint, timeout):
             self.stop()
+            if self._reader is not None:
+                self._reader.join(timeout=2.0)
+            tail = "".join(self._log_lines)
             raise RuntimeError(
                 f"Server did not become ready within {timeout}s "
-                f"at {self.endpoint}. The port may already be in use."
+                f"at {self.endpoint}. The port may already be in use.\n"
+                f"Server output (last {len(self._log_lines)} lines):\n{tail}"
             )
         log.info("Server ready at %s", self.endpoint)
         return self.endpoint
+
+    def _drain_output(self) -> None:
+        """Read subprocess stdout into a bounded buffer to avoid pipe deadlock."""
+        proc = self._proc
+        if proc is None or proc.stdout is None:
+            return
+        for line in proc.stdout:
+            self._log_lines.append(line)
 
     def stop(self) -> None:
         """Terminate the server process group (SIGTERM, then SIGKILL)."""

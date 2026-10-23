@@ -39,3 +39,15 @@ def test_rollback_on_tie_without_tie_breaker_improvement():
 def test_rollback_on_primary_degradation():
     decision, _ = decide(_metrics(0.75, 0.70), _metrics(0.80, 0.65), _CFG)
     assert decision == "rollback"
+
+
+def test_rollback_when_new_metrics_f1_is_none():
+    decision, reason = decide({"f1": None}, _metrics(0.80, 0.65), _CFG)
+    assert decision == "rollback"
+    assert "unavailable" in reason
+
+
+def test_rollback_when_active_metrics_empty():
+    decision, reason = decide(_metrics(0.85, 0.60), {}, _CFG)
+    assert decision == "rollback"
+    assert "unavailable" in reason

@@ -28,7 +28,10 @@ from dynamic_prompt_core.application.use_cases.run_cycle.state import (
     dump_state,
     load_state,
 )
-from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
+from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
+    _extract_metric_summary,
+    run_cycle_step,
+)
 from dynamic_prompt_core.domain.prompts.base import parse_prompt_layers
 from dynamic_prompt_core.domain.prompts.fixed import CLASSIFICATION_PROMPT_V0
 
@@ -67,16 +70,6 @@ def check_stop(state: CycleState, config: CycleConfig) -> tuple[bool, str | None
     if not state.any_accepted and state.cycle_counter > 0:
         return True, "no_improvement"
     return False, None
-
-
-def _extract_metric_summary(metrics: dict[str, Any]) -> dict[str, float]:
-    """Extract ``accuracy``, ``macro_f1``, ``minority_f1`` from a metrics dict."""
-    f1 = metrics.get("f1", {})
-    return {
-        "accuracy": float(metrics.get("accuracy", 0.0)),
-        "macro_f1": float(f1.get("macro", 0.0)),
-        "minority_f1": float(f1.get("minority", 0.0)),
-    }
 
 
 def _extract_rule_set(state: CycleState) -> frozenset[str]:
@@ -182,12 +175,10 @@ def load_initial_state(
         pass
 
     if dataset_artifact:
-        try:
-            deps.dataset_repository.load_artifact(dataset_artifact)
-        except Exception as exc:
+        if not os.path.exists(dataset_artifact):
             raise CycleOrchestratorError(
-                f"dataset artifact not found at {dataset_artifact!r}: {exc}"
-            ) from exc
+                f"dataset artifact not found at {dataset_artifact!r}"
+            )
     else:
         raise CycleOrchestratorError(
             "dataset artifact path is required (config [runner].dataset_artifact)"
@@ -209,7 +200,11 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
     """
     config = run_input.config or CycleConfig.from_toml(run_input.config_path)
     if run_input.max_cycles != config.max_cycles:
-        config = type(config)(**{**config.__dict__, "max_cycles": run_input.max_cycles})
+        d = config.duration
+        duration_val = d[0] if isinstance(d, list) and d else d
+        config = type(config)(
+            **{**config.__dict__, "max_cycles": run_input.max_cycles, "duration": duration_val}
+        )
 
     output_dir = config.output_dir
     os.makedirs(output_dir, exist_ok=True)
@@ -220,7 +215,6 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
         f"cycle_log_{config.run_id or 'default'}_{ts}.jsonl",
     )
 
-    all_changed_decisions: list[dict[str, Any]] = []
     stop_reason = "unrecoverable_error"
 
     try:
@@ -324,7 +318,6 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
             final_dev_metrics,
             final_holdout_metrics,
             stop_reason,
-            all_changed_decisions,
             state.run_id,
             deps.run_repository,
             output_dir,

@@ -47,3 +47,23 @@ def test_cycle_counter_increments():
     state = CycleState(cycle_counter=2, run_id="test")
     state.cycle_counter += 1
     assert state.cycle_counter == 3
+
+
+def test_max_cycles_override_collapses_list_duration():
+    """Overriding max_cycles collapses a list duration to its first element.
+
+    CycleConfig.__post_init__ sets max_cycles = len(duration) for a non-empty
+    list.  run_cycle works around this by collapsing the list to a scalar so
+    the user's override survives.
+    """
+    config = CycleConfig(duration=[10, 20, 30])
+    assert config.max_cycles == 3
+
+    overridden = 7
+    d = config.duration
+    duration_val = d[0] if isinstance(d, list) and d else d
+    new_config = type(config)(
+        **{**config.__dict__, "max_cycles": overridden, "duration": duration_val}
+    )
+    assert new_config.max_cycles == 7
+    assert new_config.duration == 10

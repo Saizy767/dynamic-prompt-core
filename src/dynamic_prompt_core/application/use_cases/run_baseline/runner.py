@@ -218,6 +218,8 @@ class BaselineRunner:
             "parse_failed": 0,
             "network_error": 0,
             "timeout": 0,
+            "classify_ok": 0,
+            "classify_failed": 0,
         }
 
     # -- paths -------------------------------------------------------------- #
@@ -499,9 +501,9 @@ class BaselineRunner:
             classify_latency_ms = (time.monotonic() - classify_start) * 1000
 
             if classify_status == _RUNNER_STATUS_OK:
-                self._stats["ok"] += 1
+                self._stats["classify_ok"] += 1
             else:
-                self._stats["parse_failed"] += 1
+                self._stats["classify_failed"] += 1
 
             row = ResultRow(
                 id=example.id,
@@ -537,6 +539,8 @@ class BaselineRunner:
         print(f"  parse_failed   : {s['parse_failed']}")
         print(f"  network_error  : {s['network_error']}")
         print(f"  timeout        : {s['timeout']}")
+        print(f"  classify_ok    : {s['classify_ok']}")
+        print(f"  classify_failed: {s['classify_failed']}")
         print("=" * 60)
 
     # -- main run ----------------------------------------------------------- #

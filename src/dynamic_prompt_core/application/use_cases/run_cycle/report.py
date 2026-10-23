@@ -26,6 +26,11 @@ VALID_STOP_REASONS = frozenset(
         "no_improvement",
         "unrecoverable_error",
         "plateau_detected",
+        "budget_exhausted",
+        "no_candidates_available",
+        "metric_degradation",
+        "rule_stagnation",
+        "rollback_streak",
     }
 )
 
@@ -94,7 +99,6 @@ def write_summary(
     final_dev_metrics: dict[str, Any],
     final_holdout_metrics: dict[str, Any],
     stop_reason: str,
-    all_changed_decisions: list[dict[str, Any]],
     run_id: str,
     run_repository: RunRepository,
     output_dir: str,
@@ -118,7 +122,6 @@ def write_summary(
         "final_holdout_metrics": final_holdout_metrics,
         "accepted_history": state.accepted_history,
         "rollback_history": state.rollback_history,
-        "all_changed_decisions": all_changed_decisions,
         "run_id": run_id,
         "timestamp": timestamp,
     }
