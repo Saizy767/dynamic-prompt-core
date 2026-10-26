@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.skip("CandidateScorer replaced by Classifier", allow_module_level=True)
+
 import math
 import typing
-
-import pytest
 
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate

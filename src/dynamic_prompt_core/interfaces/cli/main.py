@@ -126,16 +126,14 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     This is the composition root: it creates concrete infrastructure
     implementations and passes them through the typed dependency object.
     """
-    from dynamic_prompt_core.application.services.classification_policy import (
-        ArgmaxClassificationPolicy,
-    )
     from dynamic_prompt_core.domain.models.candidate import Candidate
     from dynamic_prompt_core.infrastructure.llm import AsyncTask
+    from dynamic_prompt_core.infrastructure.llm.classifier_factory import (
+        build_classifier,
+    )
+    from dynamic_prompt_core.infrastructure.llm.extractor import Extractor
     from dynamic_prompt_core.infrastructure.llm.scoring.config import (
         scorer_backend_config_from_toml,
-    )
-    from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
-        build_candidate_scorer,
     )
     from dynamic_prompt_core.infrastructure.storage import (
         PromptStoreConfig,
@@ -157,14 +155,15 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     embedding_client = _EmbeddingClientAdapter()
 
     model_path = toml_config.get("llm", {}).get("model_path", "model")
-    scorer = build_candidate_scorer(
-        scorer_backend_config_from_toml(toml_config, default_model_path=model_path)
-    )
-    policy = ArgmaxClassificationPolicy()
     candidates = tuple(
         Candidate(v)
         for v in toml_config.get("classification", {}).get("candidates", ["0", "1"])
     )
+    classifier = build_classifier(
+        scorer_backend_config_from_toml(toml_config, default_model_path=model_path),
+        list(candidates),
+    )
+    extractor = Extractor(task=llm, language="ru")  # type: ignore[arg-type]
 
     teacher_llm_client = None
     try:
@@ -206,8 +205,8 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
         dataset_repository=dataset_repo,
         embedding_client=embedding_client,
         normalizer=normalizer,
-        candidate_scorer=scorer,
-        classification_policy=policy,
+        classifier=classifier,
+        extractor=extractor,
         candidates=candidates,
         teacher_llm_client=teacher_llm_client,
         stop_criteria_deps=stop_criteria_deps,
@@ -356,7 +355,7 @@ async def main(argv: list[str] | None = None) -> int:
         log.exception("Unrecoverable error during cycle execution.")
         return 1
     finally:
-        close_fn = getattr(deps.candidate_scorer, "aclose", None)
+        close_fn = getattr(deps.classifier, "aclose", None)
         if close_fn is not None:
             await close_fn()
         from dynamic_prompt_core.infrastructure.llm.teacher_client import (

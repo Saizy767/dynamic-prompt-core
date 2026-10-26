@@ -133,20 +133,18 @@ async def _run_version_async(
     run_id: str,
 ) -> str:
     """Construct a BaselineRunner with a custom classify_prompt and run it."""
-    from dynamic_prompt_core.application.services.classification_policy import (
-        ArgmaxClassificationPolicy,
-    )
     from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
         BaselineRunner,
         RunnerConfig,
     )
     from dynamic_prompt_core.domain.models.candidate import Candidate
     from dynamic_prompt_core.infrastructure.llm import AsyncTask
+    from dynamic_prompt_core.infrastructure.llm.classifier_factory import (
+        build_classifier,
+    )
+    from dynamic_prompt_core.infrastructure.llm.extractor import Extractor
     from dynamic_prompt_core.infrastructure.llm.scoring.config import (
         scorer_backend_config_from_toml,
-    )
-    from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
-        build_candidate_scorer,
     )
 
     runner_config = RunnerConfig.from_config(config_path)
@@ -167,15 +165,19 @@ async def _run_version_async(
         raw_config = tomllib.load(f)
     default_model_path = str(raw_config.get("llm", {}).get("model_path", "model"))
 
+    candidates = [Candidate(v) for v in runner_config.candidates]
+    classifier = build_classifier(
+        scorer_backend_config_from_toml(raw_config, default_model_path=default_model_path),
+        candidates,
+    )
+    extractor = Extractor(task=task, language=runner_config.language)
+
     runner = BaselineRunner(
-        task=task,
+        classifier=classifier,
+        extractor=extractor,
         config=runner_config,
         split=split,
-        scorer=build_candidate_scorer(
-            scorer_backend_config_from_toml(raw_config, default_model_path=default_model_path)
-        ),
-        policy=ArgmaxClassificationPolicy(),
-        candidates=[Candidate(v) for v in runner_config.candidates],
+        candidates=candidates,
         run_id=run_id,
         dataset_artifact=dataset_artifact,
         classify_prompt=prompt_artifact,
@@ -195,9 +197,9 @@ def run_version(
 ) -> str:
     """Run a prompt version on a split and return the results artifact path.
 
-    Uses asyncio.run to drive the async BaselineRunner. The fixed extraction
-    prompt (EXTRACTION_PROMPT) is used without modification — the runner's
-    _extract_prompt is always EXTRACTION_PROMPT regardless of classify_prompt.
+    Uses asyncio.run to drive the async BaselineRunner. The extractor's
+    system prompt is loaded from a resource file — the runner's extractor
+    always uses it regardless of classify_prompt.
     """
     if run_id is None:
         run_id = f"cmp-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"

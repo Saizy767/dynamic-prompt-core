@@ -56,10 +56,11 @@ async def test_stop_writes_artifact(tmp_path):
     assert decision.should_stop is True
     assert decision.reason is not None
 
-    files = os.listdir(output_dir)
+    artifact_dir = os.path.join(output_dir, "report_cycle")
+    files = os.listdir(artifact_dir)
     artifact_files = [f for f in files if f.startswith("stop_decision_")]
     assert len(artifact_files) == 1
-    with open(os.path.join(output_dir, artifact_files[0]), encoding="utf-8") as f:
+    with open(os.path.join(artifact_dir, artifact_files[0]), encoding="utf-8") as f:
         artifact = json.load(f)
     assert artifact["round"] == 4
     assert artifact["reason"] == decision.reason

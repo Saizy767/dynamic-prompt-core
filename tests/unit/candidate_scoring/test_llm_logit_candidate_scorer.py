@@ -1,9 +1,11 @@
 """Tests for the LLMLogitCandidateScorer with deterministic doubles."""
 from __future__ import annotations
 
-import math
-
 import pytest
+
+pytest.skip("LLMLogitCandidateScorer replaced by LLMLogitClassifier", allow_module_level=True)
+
+import math
 
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate

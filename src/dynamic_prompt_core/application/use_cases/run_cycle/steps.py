@@ -95,11 +95,10 @@ async def run_active_on_dev(
     runner_config = RunnerConfig.from_config(config_path)
     cycle_number = state.cycle_counter + 1
     runner = BaselineRunner(
-        task=cast(Any, deps.llm_client),
+        classifier=deps.classifier,
+        extractor=deps.extractor,
         config=runner_config,
         split=config.dev_split,
-        scorer=deps.candidate_scorer,
-        policy=deps.classification_policy,
         candidates=list(deps.candidates),
         run_id=state.run_id,
         classify_prompt=state.active_version,
@@ -244,11 +243,10 @@ async def run_new_on_dev(
     """
     runner_config = RunnerConfig.from_config(config_path)
     runner = BaselineRunner(
-        task=cast(Any, deps.llm_client),
+        classifier=deps.classifier,
+        extractor=deps.extractor,
         config=runner_config,
         split=config.dev_split,
-        scorer=deps.candidate_scorer,
-        policy=deps.classification_policy,
         candidates=list(deps.candidates),
         run_id=run_id,
         classify_prompt=new_prompt,
@@ -275,11 +273,10 @@ async def run_holdout(
     """
     runner_config = RunnerConfig.from_config(config_path)
     runner = BaselineRunner(
-        task=cast(Any, deps.llm_client),
+        classifier=deps.classifier,
+        extractor=deps.extractor,
         config=runner_config,
         split=config.holdout_split,
-        scorer=deps.candidate_scorer,
-        policy=deps.classification_policy,
         candidates=list(deps.candidates),
         run_id=run_id,
         classify_prompt=prompt_artifact,

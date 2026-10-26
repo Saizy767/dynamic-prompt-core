@@ -46,222 +46,28 @@ modules, or interface modules.
 - **WHEN** `Classification` is imported
 - **THEN** only domain modules and the Python standard library are required
 
-### Requirement: ClassificationPolicy as application service
-`ClassificationPolicy` SHALL be an application-internal strategy abstraction
-residing in `application/services/classification_policy.py`. It SHALL be defined
-as a `typing.Protocol`. It is NOT an outbound port and NOT an external
-dependency: it is a pure application-layer decision rule. Infrastructure SHALL
-NOT implement this policy. The concrete `ArgmaxClassificationPolicy`
-implementation SHALL reside alongside the protocol in the same module. The
-`ClassifyInput` use case SHALL depend on the `ClassificationPolicy` protocol,
-not the concrete implementation, so the decision rule is substitutable and
-testable with doubles.
-
-#### Scenario: Policy resides in application services
-- **WHEN** the `ClassificationPolicy` is located
-- **THEN** it is in `application/services/classification_policy.py`
-
-#### Scenario: Policy is a typing.Protocol
-- **WHEN** the `ClassificationPolicy` is defined
-- **THEN** it is a `typing.Protocol`
-
-#### Scenario: Policy not implemented by infrastructure
-- **WHEN** the policy is inspected
-- **THEN** no infrastructure module implements or owns the classification decision
-
-#### Scenario: Concrete policy alongside protocol
-- **WHEN** the concrete `ArgmaxClassificationPolicy` is located
-- **THEN** it resides in the same `application/services/classification_policy.py` module as the protocol
-
-### Requirement: ClassificationPolicy consumes judgments not model outputs
-`ClassificationPolicy` SHALL accept a `list[Judgment]` and SHALL return a
-`Classification`. The policy SHALL NOT accept raw LLM responses, logits, token
-IDs, generated text, or provider response objects. The policy SHALL NOT perform
-model inference, tokenization, logits extraction, prompt construction, or
-provider API calls. The policy's sole inputs are the judgments produced by a
-`CandidateScorer`.
-
-#### Scenario: Policy accepts judgments
-- **WHEN** the policy is invoked
-- **THEN** it accepts a list of `Judgment` objects
-
-#### Scenario: Policy returns classification
-- **WHEN** the policy successfully produces a decision
-- **THEN** it returns a `Classification`
-
-#### Scenario: Policy rejects model internals
-- **WHEN** the policy contract is inspected
-- **THEN** it accepts no logits, token IDs, generated text, or provider response objects
-
-#### Scenario: Policy performs no inference
-- **WHEN** the policy is invoked
-- **THEN** it performs no model inference, tokenization, logits extraction, prompt construction, or provider API calls
-
-### Requirement: ClassificationPolicy responsibilities
-`ClassificationPolicy` SHALL be responsible for semantic decisions: selecting
-the highest-scoring candidate, applying thresholds, handling ties, deciding
-whether no candidate is sufficiently supported, and converting judgments into
-the application's `Classification` representation. The initial implementation
-SHALL select the candidate with the maximum score. When two or more candidates
-share the maximum score, the first candidate in input order SHALL win. The
-policy SHALL NOT calibrate scores, normalize scores, or redefine the score
-scale.
-
-#### Scenario: Highest scoring candidate selected
-- **WHEN** judgments with scores `A=0.2`, `B=0.8`, `C=0.5` are classified
-- **THEN** the selected candidate is `B`
-
-#### Scenario: Single candidate selected
-- **WHEN** a single judgment is classified
-- **THEN** that candidate is selected
-
-#### Scenario: Tie broken by input order
-- **WHEN** two or more candidates share the maximum score
-- **THEN** the first candidate in input order is selected
-
-#### Scenario: Policy does not calibrate or normalize
-- **WHEN** the policy classifies judgments
-- **THEN** it does not calibrate, normalize, or rescale the scores
-
-### Requirement: ClassificationPolicy preserves judgment order
-`ClassificationPolicy` SHALL preserve the scorer-provided judgment order in the
-returned `Classification.judgments`. The judgment sequence in `Classification`
-SHALL be in the same order as supplied to the policy. For the initial
-`ArgmaxClassificationPolicy`, when two or more candidates share the maximum
-score, the judgment appearing first in the input order SHALL win. Preserving
-order makes tie-breaking deterministic and avoids hidden dependencies on
-sort order.
-
-#### Scenario: Classification judgments preserve input order
-- **WHEN** the policy receives judgments in order `[A, B, C]`
-- **THEN** `Classification.judgments` is `(A, B, C)` in that same order
-
-#### Scenario: Tie breaks to first in input order
-- **WHEN** judgments `[A=0.8, B=0.8, C=0.5]` are classified
-- **THEN** the selected candidate is `A`, the first judgment with the maximum score
-
-### Requirement: ClassificationPolicy empty input semantics
-`ClassificationPolicy` SHALL define explicit behavior when invoked with an empty
-judgment list. Empty judgments SHALL NOT produce a silent default
-classification; the policy SHALL either raise an exception or return a
-classification that explicitly denotes no candidate, according to its documented
-contract. The behavior SHALL be documented and testable.
-
-#### Scenario: Empty judgments handled explicitly
-- **WHEN** the policy is invoked with an empty judgment list
-- **THEN** the behavior is an explicit raise or an explicit no-candidate result, not a silent default
-
-### Requirement: Classification rules as explicit use case input
-The `classify_input` use case SHALL receive the active classification rules as
-an explicit argument. The rules SHALL NOT be loaded from a global source, a
-service locator, or an implicit default inside the use case. The caller is
-responsible for supplying the rules from the active prompt version.
-
-#### Scenario: Rules passed as explicit argument
-- **WHEN** the `classify_input` use case is invoked
-- **THEN** the active classification rules are passed as an explicit argument
-
-#### Scenario: No implicit rule loading
-- **WHEN** the `classify_input` use case is inspected
-- **THEN** it does not load rules from a global source, service locator, or implicit default
-
-### Requirement: ClassifyInput use case orchestration
-A `ClassifyInput` use case SHALL coordinate the scoring-classification flow:
-validate candidate uniqueness at the application boundary, invoke
-`CandidateScorer.score` with the active classification rules to produce
-judgments, and invoke `ClassificationPolicy.classify` to produce a
-`Classification`. The use case SHALL receive its dependencies
-(`CandidateScorer`, `ClassificationPolicy`) from outside via a typed dependency
-object. The use case SHALL receive the active classification rules as an
-explicit input. The use case SHALL NOT implement scoring mechanics, inspect
-model outputs, or know whether the scorer uses logits, embeddings, an API, a
-local model, or a mock.
-
-#### Scenario: Use case validates candidates before scoring
-- **WHEN** the use case is invoked with candidates
-- **THEN** it validates candidate uniqueness before invoking the scorer
-
-#### Scenario: Use case scores then classifies
-- **WHEN** the use case is invoked with text, candidates, and rules
-- **THEN** it invokes the scorer with the rules to produce judgments, then the policy to produce a classification
-
-#### Scenario: Use case receives dependencies from outside
-- **WHEN** the use case is constructed
-- **THEN** the scorer and policy are passed in via a typed dependency object
-
-#### Scenario: Use case receives rules as explicit input
-- **WHEN** the use case is invoked
-- **THEN** it receives the active classification rules as an explicit argument, not from global state
-
-#### Scenario: Use case does not inspect model outputs
-- **WHEN** the use case orchestrates the flow
-- **THEN** it does not inspect logits, token IDs, or model internals
-
-#### Scenario: Use case is scorer-mechanism agnostic
-- **WHEN** the use case is run with different scorer implementations
-- **THEN** its orchestration is identical regardless of the scoring mechanism
-
-### Requirement: Scoring classification separation invariant
-`CandidateScorer` SHALL NOT select a winning candidate, rank candidates for
-selection, or aggregate judgments into a classification decision.
-`ClassificationPolicy` SHALL NOT perform model inference or produce scores. The
-flow `score → classify` SHALL be the only supported composition; a combined
-`scorer.classify(...)` operation SHALL NOT exist. This separation permits
-multiple classification strategies, offline re-ranking, threshold experiments,
-deterministic testing, non-LLM scorers, and score inspection.
-
-#### Scenario: Scorer does not classify
-- **WHEN** the scorer port contract is inspected
-- **THEN** it exposes no classification, selection, ranking, or aggregation operation
-
-#### Scenario: Policy does not score
-- **WHEN** the policy contract is inspected
-- **THEN** it exposes no scoring, model inference, or candidate evaluation operation
-
-#### Scenario: No combined score-and-classify operation
-- **WHEN** the application flow is inspected
-- **THEN** scoring and classification are separate steps composed as `score → classify`
-
-### Requirement: Candidate validation at application boundary
-Candidate request validation SHALL be performed at the application boundary
-before the scorer is invoked. The use case SHALL reject empty candidate lists
-(when classification requires at least one candidate) and duplicate candidates
-before any scoring occurs. The infrastructure scorer SHALL NOT be responsible
-for enforcing application-level candidate-set semantics.
-
-#### Scenario: Empty candidate list rejected
-- **WHEN** the use case is invoked with an empty candidate list
-- **THEN** the request is rejected before the scorer is invoked
-
-#### Scenario: Duplicate candidates rejected before scoring
-- **WHEN** the use case is invoked with duplicate candidates
-- **THEN** the request is rejected before the scorer is invoked
-
-#### Scenario: Infrastructure not responsible for candidate-set semantics
-- **WHEN** the scorer is invoked
-- **THEN** it is not responsible for application-level candidate-set validation
-
 ### Requirement: Scoring flow dependency direction
 The dependency graph SHALL remain `domain` ← `application` ← `infrastructure`.
-`Classification` SHALL reside in `domain/models`. `ClassificationPolicy` and
-its concrete `ArgmaxClassificationPolicy` implementation SHALL reside in
-`application/services/classification_policy.py`. `ClassifyInput` SHALL reside in
-`application/use_cases`. The application use case SHALL import the
-`CandidateScorer` outbound port and the `ClassificationPolicy` application
-service protocol, not concrete infrastructure implementations. The domain SHALL
-NOT import application, infrastructure, or interfaces.
+`Classification` SHALL reside in `domain/models`. The `Classifier` outbound port
+SHALL reside in `application/ports/outbound/`. The `Classifier` infrastructure
+implementation SHALL reside in `infrastructure/llm/`. The application use case
+SHALL import the `Classifier` outbound port, not concrete infrastructure
+implementations. `ClassificationPolicy` as a separate application-internal
+strategy SHALL be removed; the decision logic SHALL reside inside the
+`Classifier` implementation. The domain SHALL NOT import application,
+infrastructure, or interfaces.
 
 #### Scenario: Classification in domain models
 - **WHEN** `Classification` is located
 - **THEN** it resides in `domain/models`
 
-#### Scenario: Policy in application services
-- **WHEN** `ClassificationPolicy` is located
-- **THEN** it resides in `application/services/classification_policy.py`
+#### Scenario: Classifier port in application outbound
+- **WHEN** the `Classifier` port is located
+- **THEN** it resides in `application/ports/outbound/`
 
-#### Scenario: Use case depends on abstractions not concrete implementations
-- **WHEN** the `ClassifyInput` use case is inspected
-- **THEN** it imports the `CandidateScorer` port and the `ClassificationPolicy` protocol, not concrete infrastructure
+#### Scenario: Use case depends on port not concrete implementation
+- **WHEN** the application use case is inspected
+- **THEN** it imports the `Classifier` port, not concrete infrastructure
 
 #### Scenario: Domain does not depend on outer layers
 - **WHEN** the domain is inspected
@@ -270,20 +76,19 @@ NOT import application, infrastructure, or interfaces.
 ### Requirement: Scoring flow architecture validation
 The `application-ports-isolated` import-linter contract SHALL continue to pass.
 `application.ports` SHALL NOT import `infrastructure` or `interfaces`, directly
-or indirectly. The `ClassificationPolicy` resides in `application/services`, not
-`application/ports`, because it is an application-internal strategy, not an
-infrastructure-implemented outbound port; it SHALL NOT import `infrastructure` or
-`interfaces`. No exception to `application-ports-isolated` SHALL be introduced
-for the `ClassifyInput` use case.
+or indirectly. The `Classifier` port resides in `application/ports/outbound/`
+and SHALL NOT import `infrastructure` or `interfaces`. No exception to
+`application-ports-isolated` SHALL be introduced for the classification use
+case.
 
 #### Scenario: Application ports isolated from infrastructure
 - **WHEN** `lint-imports` is run
 - **THEN** `application.ports` does not import `infrastructure` or `interfaces`
 
-#### Scenario: Policy does not import infrastructure
-- **WHEN** the `ClassificationPolicy` module is inspected
+#### Scenario: Classifier port does not import infrastructure
+- **WHEN** the `Classifier` port module is inspected
 - **THEN** it does not import `infrastructure` or `interfaces`
 
 #### Scenario: No port-boundary exceptions introduced
-- **WHEN** the new policy service and use case are added
+- **WHEN** the new `Classifier` port is added
 - **THEN** no exception to `application-ports-isolated` is introduced

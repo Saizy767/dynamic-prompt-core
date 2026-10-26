@@ -3,7 +3,7 @@
 ``LlamaCppBatchedCausalLMAdapter`` implements the ``BatchedCausalLanguageModel``
 seam and ``LlamaCppBatchTokenizerAdapter`` implements the ``BatchTokenizerAdapter``
 seam using ``llama-cpp-python``.  Both are wired into the shared
-``LLMLogitCandidateScorer`` so the scoring algorithm, logit scorer, and prompt
+``LLMLogitClassifier`` so the scoring algorithm, logit scorer, and prompt
 builder are reused unchanged.
 
 ``llama_cpp`` is imported lazily inside ``LlamaCppBatchedCausalLMAdapter.__init__``

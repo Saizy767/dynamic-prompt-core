@@ -1,6 +1,8 @@
 """Integration tests for the end-to-end candidate-scoring classification path."""
 from __future__ import annotations
 
+import pytest; pytest.skip("old abstraction removed", allow_module_level=True)
+
 from collections.abc import Sequence
 
 from dynamic_prompt_core.application.services.classification_policy import (

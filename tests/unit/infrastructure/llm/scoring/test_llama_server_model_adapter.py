@@ -109,7 +109,7 @@ class TestBuildLogitsFromLogprobs:
         all candidates got log_softmax ≈ 0.0, making softmax always 50/50.
         Uses causal alignment: prefix_count=2, candidate at position 1.
         """
-        from dynamic_prompt_core.infrastructure.llm.scoring.candidate_scorer import (
+        from dynamic_prompt_core.infrastructure.llm.classifier import (
             _softmax,
         )
 

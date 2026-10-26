@@ -8,16 +8,17 @@ from typing import Any
 
 import pytest
 
-from dynamic_prompt_core.application.services.classification_policy import (
-    ArgmaxClassificationPolicy,
-)
 from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
     RunCycleDeps,
 )
 from dynamic_prompt_core.domain.models.candidate import Candidate
+from dynamic_prompt_core.domain.models.classification import Classification
+from dynamic_prompt_core.domain.models.classification_rules import ClassificationRules
 from dynamic_prompt_core.domain.models.dataset import Dataset, Record
 from dynamic_prompt_core.domain.models.judgment import Judgment
+from dynamic_prompt_core.infrastructure.llm import CallResult, ResponseStatus
+from dynamic_prompt_core.infrastructure.llm.extractor import ExtractionResult
 
 
 class MockLLMClient:
@@ -141,23 +142,48 @@ class MockTeacherLLMClient:
         )
 
 
-class FakeCandidateScorer:
-    """Fake CandidateScorer returning deterministic judgments.
+class FakeClassifier:
+    """Fake Classifier returning a deterministic Classification.
 
-    Each candidate receives a fixed score based on its position so the real
-    ArgmaxClassificationPolicy always selects the first candidate.
+    Always selects the first candidate with descending scores.
     """
 
-    async def score(
+    async def classify(
         self,
         text: str,
-        candidates: list[Candidate],
-        rules: list[str],
-    ) -> list[Judgment]:
-        return [
-            Judgment(candidate=c, score=float(len(candidates) - i))
-            for i, c in enumerate(candidates)
+        rules: ClassificationRules,
+    ) -> Classification:
+        cands = FAKE_CANDIDATES
+        judgments = [
+            Judgment(candidate=c, score=float(len(cands) - i))
+            for i, c in enumerate(cands)
         ]
+        return Classification(selected=cands[0], judgments=tuple(judgments))
+
+
+class FakeExtractor:
+    """Fake Extractor returning a deterministic ExtractionResult."""
+
+    async def extract(
+        self,
+        session: Any,
+        text: str,
+        true_val: int | None = None,
+    ) -> ExtractionResult:
+        return ExtractionResult(
+            theses_raw=["thesis one", "thesis two"],
+            theses_norm=["thesis one", "thesis two"],
+            status="ok",
+            latency_ms=1.0,
+            raw_extract=None,
+            call_result=CallResult(
+                parsed=None,
+                raw_content=None,
+                latency_ms=1.0,
+                parse_status=None,
+                status=ResponseStatus.OK,
+            ),
+        )
 
 
 FAKE_CANDIDATES: tuple[Candidate, ...] = (Candidate("0"), Candidate("1"))
@@ -208,8 +234,8 @@ def build_mock_deps():
             dataset_repository=MockDatasetRepository(),
             embedding_client=MockEmbeddingClient(),
             normalizer=MockNormalizer(),
-            candidate_scorer=FakeCandidateScorer(),
-            classification_policy=ArgmaxClassificationPolicy(),
+            classifier=FakeClassifier(),
+            extractor=FakeExtractor(),
             candidates=FAKE_CANDIDATES,
             teacher_llm_client=teacher,
         )

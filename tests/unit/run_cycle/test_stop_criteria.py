@@ -7,9 +7,7 @@ from dynamic_prompt_core.application.ports.outbound.stop_criteria import (
     StopDecision,
     StopEvaluationContext,
 )
-from dynamic_prompt_core.application.services.classification_policy import (
-    ArgmaxClassificationPolicy,
-)
+from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.deps import (
     EvaluateStopCriteriaDeps,
 )
@@ -112,7 +110,8 @@ def test_stop_criteria_deps_optional():
     )
     from tests.unit.run_cycle.conftest import (
         FAKE_CANDIDATES,
-        FakeCandidateScorer,
+        FakeClassifier,
+        FakeExtractor,
         MockDatasetRepository,
         MockEmbeddingClient,
         MockLLMClient,
@@ -128,8 +127,8 @@ def test_stop_criteria_deps_optional():
         dataset_repository=MockDatasetRepository(),
         embedding_client=MockEmbeddingClient(),
         normalizer=MockNormalizer(),
-        candidate_scorer=FakeCandidateScorer(),
-        classification_policy=ArgmaxClassificationPolicy(),
+        classifier=FakeClassifier(),
+        extractor=FakeExtractor(),
         candidates=FAKE_CANDIDATES,
     )
     assert deps.stop_criteria_deps is None
@@ -142,7 +141,8 @@ def test_stop_criteria_deps_provided():
     )
     from tests.unit.run_cycle.conftest import (
         FAKE_CANDIDATES,
-        FakeCandidateScorer,
+        FakeClassifier,
+        FakeExtractor,
         MockDatasetRepository,
         MockEmbeddingClient,
         MockLLMClient,
@@ -159,8 +159,8 @@ def test_stop_criteria_deps_provided():
         dataset_repository=MockDatasetRepository(),
         embedding_client=MockEmbeddingClient(),
         normalizer=MockNormalizer(),
-        candidate_scorer=FakeCandidateScorer(),
-        classification_policy=ArgmaxClassificationPolicy(),
+        classifier=FakeClassifier(),
+        extractor=FakeExtractor(),
         candidates=FAKE_CANDIDATES,
         stop_criteria_deps=stop_deps,
     )

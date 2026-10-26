@@ -1,7 +1,7 @@
 """Infrastructure-internal scoring error.
 
 This error is raised inside infrastructure to wrap library-specific failures
-and invalid scores.  The ``LLMLogitCandidateScorer`` translates it into the
+and invalid scores.  The ``LLMLogitClassifier`` translates it into the
 application-facing ``CandidateScoringError`` at the port boundary.  The
 application never imports or receives this error.
 """

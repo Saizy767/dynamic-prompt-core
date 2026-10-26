@@ -460,6 +460,8 @@ def validate_limits(
         raise PromptComposerError("prompt has no layers")
 
     rule_count = len(layers.rules)
+    if rule_count < 3:
+        raise PromptComposerError(f"too few rules: {rule_count} < 3")
     if rule_count > config.max_rules:
         raise PromptComposerError(f"too many rules: {rule_count} > {config.max_rules}")
 

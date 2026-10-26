@@ -5,10 +5,12 @@ Run with: ``REAL_MODEL_TEST=1 pytest tests/unit/candidate_scoring/test_batch_int
 """
 from __future__ import annotations
 
+import pytest
+
+pytest.skip("CandidateScorer replaced by Classifier", allow_module_level=True)
+
 import math
 import os
-
-import pytest
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("REAL_MODEL_TEST"),

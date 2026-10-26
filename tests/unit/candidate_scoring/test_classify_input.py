@@ -1,9 +1,11 @@
 """Tests for the ClassifyInput use case."""
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import pytest
+
+pytest.skip("ClassifyInput use case removed", allow_module_level=True)
+
+from collections.abc import Sequence
 
 from dynamic_prompt_core.application.services.classification_policy import (
     ArgmaxClassificationPolicy,

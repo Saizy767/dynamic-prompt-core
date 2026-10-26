@@ -35,6 +35,9 @@ gguf = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"dynamic_prompt_core.infrastructure.llm.prompts" = ["*.txt"]
+
 # --------------------------------------------------------------------------- #
 #  import-linter — architectural boundary enforcement
 # --------------------------------------------------------------------------- #

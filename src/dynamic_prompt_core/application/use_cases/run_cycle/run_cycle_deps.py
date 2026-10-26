@@ -5,15 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from dynamic_prompt_core.application.ports.outbound.candidate_scorer import (
-    CandidateScorer,
-)
+from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
 from dynamic_prompt_core.application.ports.outbound.dataset_repository import (
     DatasetRepository,
 )
 from dynamic_prompt_core.application.ports.outbound.embedding_client import (
     EmbeddingClient,
 )
+from dynamic_prompt_core.application.ports.outbound.extractor import Extractor
 from dynamic_prompt_core.application.ports.outbound.llm_client import LLMClient
 from dynamic_prompt_core.application.ports.outbound.normalizer import Normalizer
 from dynamic_prompt_core.application.ports.outbound.prompt_repository import (
@@ -24,9 +23,6 @@ from dynamic_prompt_core.application.ports.outbound.run_repository import (
 )
 from dynamic_prompt_core.application.ports.outbound.teacher_llm_client import (
     TeacherLLMClient,
-)
-from dynamic_prompt_core.application.services.classification_policy import (
-    ClassificationPolicy,
 )
 from dynamic_prompt_core.domain.models.candidate import Candidate
 
@@ -52,8 +48,8 @@ class RunCycleDeps:
     dataset_repository: DatasetRepository
     embedding_client: EmbeddingClient
     normalizer: Normalizer
-    candidate_scorer: CandidateScorer
-    classification_policy: ClassificationPolicy
+    classifier: Classifier
+    extractor: Extractor
     candidates: tuple[Candidate, ...]
     teacher_llm_client: TeacherLLMClient | None = None
     stop_criteria_deps: EvaluateStopCriteriaDeps | None = None

@@ -2,11 +2,11 @@
 
 These tests target specific deleted symbols, not arbitrary text. The following
 symbols are explicitly ALLOWED and not flagged:
-  - classify_input (the new candidate-scoring use case)
-  - ClassificationPolicy / ArgmaxClassificationPolicy (the new policy)
+  - classify_input (the candidate-scoring use case, being removed)
+  - Classifier (the new outbound port)
   - Classification (the new domain model)
   - CLASSIFICATION_PROMPT_V0 (retained as prompt versioning seed)
-  - classification_policy.py (the new service module)
+  - classifier.py (the new infrastructure module)
 """
 from __future__ import annotations
 

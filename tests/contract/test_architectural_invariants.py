@@ -47,7 +47,7 @@ class TestApplicationTestsDoNotImportInfrastructure:
     FORBIDDEN_IMPORTS = {
         "transformers",
         "torch",
-        "dynamic_prompt_core.infrastructure.llm.scoring.candidate_scorer",
+        "dynamic_prompt_core.infrastructure.llm.classifier",
         "dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer",
         "dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter",
         "dynamic_prompt_core.infrastructure.llm.scoring.model_adapter",
@@ -85,27 +85,27 @@ class TestApplicationTestsDoNotImportInfrastructure:
 # --------------------------------------------------------------------------- #
 #  Task 7.2: Concrete scorer construction has one production source
 # --------------------------------------------------------------------------- #
-class TestConcreteScorerConstructionHasOneSource:
-    """Verify that both composition roots route through build_candidate_scorer
-    and neither constructs LLMLogitCandidateScorer directly."""
+class TestConcreteClassifierConstructionHasOneSource:
+    """Verify that both composition roots route through build_classifier
+    and neither constructs LLMLogitClassifier directly."""
 
     def test_build_cli_deps_uses_shared_factory(self) -> None:
         main_path = SRC_ROOT / "interfaces" / "cli" / "main.py"
         text = _file_text(main_path)
-        assert "build_candidate_scorer" in text, (
-            "build_cli_deps must call build_candidate_scorer"
+        assert "build_classifier" in text, (
+            "build_cli_deps must call build_classifier"
         )
 
     def test_runner_cli_uses_shared_factory(self) -> None:
         runner_path = SRC_ROOT / "application" / "use_cases" / "run_baseline" / "runner.py"
         text = _file_text(runner_path)
-        assert "build_candidate_scorer" in text, (
-            "runner CLI must call build_candidate_scorer"
+        assert "build_classifier" in text, (
+            "runner CLI must call build_classifier"
         )
 
-    def test_neither_composition_root_constructs_llm_logit_scorer_directly(self) -> None:
+    def test_neither_composition_root_constructs_llm_logit_classifier_directly(self) -> None:
         """Neither build_cli_deps nor runner._main_async should construct
-        LLMLogitCandidateScorer directly (they must go through the factory)."""
+        LLMLogitClassifier directly (they must go through the factory)."""
         main_path = SRC_ROOT / "interfaces" / "cli" / "main.py"
         runner_path = SRC_ROOT / "application" / "use_cases" / "run_baseline" / "runner.py"
 
@@ -114,37 +114,37 @@ class TestConcreteScorerConstructionHasOneSource:
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
                     func = node.func
-                    if isinstance(func, ast.Name) and func.id == "LLMLogitCandidateScorer":
-                        pytest.fail(f"{path} constructs LLMLogitCandidateScorer directly")
+                    if isinstance(func, ast.Name) and func.id == "LLMLogitClassifier":
+                        pytest.fail(f"{path} constructs LLMLogitClassifier directly")
                     if (
                         isinstance(func, ast.Attribute)
-                        and func.attr == "LLMLogitCandidateScorer"
+                        and func.attr == "LLMLogitClassifier"
                     ):
-                        pytest.fail(f"{path} constructs LLMLogitCandidateScorer directly")
+                        pytest.fail(f"{path} constructs LLMLogitClassifier directly")
 
 
 # --------------------------------------------------------------------------- #
 #  Task 7.3: Scorer constructed once per process
 # --------------------------------------------------------------------------- #
-class TestScorerConstructedOncePerProcess:
-    """Verify the composition root constructs the scorer once, not per round."""
+class TestClassifierConstructedOncePerProcess:
+    """Verify the composition root constructs the classifier once, not per round."""
 
     def test_build_cli_deps_has_single_factory_call(self) -> None:
         main_path = SRC_ROOT / "interfaces" / "cli" / "main.py"
         text = _file_text(main_path)
-        count = text.count("build_candidate_scorer(")
-        assert count >= 1, "build_cli_deps must call build_candidate_scorer at least once"
+        count = text.count("build_classifier(")
+        assert count >= 1, "build_cli_deps must call build_classifier at least once"
 
-    def test_run_cycle_does_not_construct_scorer(self) -> None:
-        """run_cycle application code must not construct a scorer — it receives
+    def test_run_cycle_does_not_construct_classifier(self) -> None:
+        """run_cycle application code must not construct a classifier — it receives
         one from RunCycleDeps."""
         steps_path = SRC_ROOT / "application" / "use_cases" / "run_cycle" / "steps.py"
         text = _file_text(steps_path)
-        assert "build_candidate_scorer" not in text, (
-            "run_cycle steps must not construct a scorer — it receives one from deps"
+        assert "build_classifier" not in text, (
+            "run_cycle steps must not construct a classifier — it receives one from deps"
         )
-        assert "LLMLogitCandidateScorer" not in text, (
-            "run_cycle steps must not reference LLMLogitCandidateScorer"
+        assert "LLMLogitClassifier" not in text, (
+            "run_cycle steps must not reference LLMLogitClassifier"
         )
 
 
@@ -165,8 +165,7 @@ class TestNoLegacyStructuredGenerationDependency:
     @pytest.mark.parametrize("symbol", LEGACY_SYMBOLS)
     def test_legacy_symbols_absent_from_classification_path(self, symbol: str) -> None:
         classification_modules = [
-            SRC_ROOT / "application" / "use_cases" / "classify_input",
-            SRC_ROOT / "application" / "services" / "classification_policy.py",
+            SRC_ROOT / "application" / "ports" / "outbound" / "classifier.py",
             SRC_ROOT / "domain" / "models" / "classification.py",
             SRC_ROOT / "application" / "use_cases" / "run_baseline" / "runner.py",
         ]
@@ -185,12 +184,12 @@ class TestNoLegacyStructuredGenerationDependency:
 
     def test_no_json_classification_response_in_classification_path(self) -> None:
         """The classification path must not parse JSON classification responses."""
-        classify_input_path = (
-            SRC_ROOT / "application" / "use_cases" / "classify_input" / "classify_input.py"
+        classifier_path = (
+            SRC_ROOT / "infrastructure" / "llm" / "classifier.py"
         )
-        text = _file_text(classify_input_path)
+        text = _file_text(classifier_path)
         assert "json" not in text.lower() or "json" not in text, (
-            "classify_input should not parse JSON classification responses"
+            "classifier should not parse JSON classification responses"
         )
 
 
@@ -199,20 +198,13 @@ class TestNoLegacyStructuredGenerationDependency:
 # --------------------------------------------------------------------------- #
 class TestCompositionRootMayImportInfrastructure:
     """Positive assertion: the composition root is allowed to import
-    infrastructure scorer implementations."""
+    infrastructure classifier implementations."""
 
-    def test_cli_main_imports_build_candidate_scorer(self) -> None:
+    def test_cli_main_imports_build_classifier(self) -> None:
         main_path = SRC_ROOT / "interfaces" / "cli" / "main.py"
         text = _file_text(main_path)
-        assert "build_candidate_scorer" in text, (
-            "Composition root must import build_candidate_scorer from infrastructure"
-        )
-
-    def test_cli_main_imports_argmax_policy(self) -> None:
-        main_path = SRC_ROOT / "interfaces" / "cli" / "main.py"
-        text = _file_text(main_path)
-        assert "ArgmaxClassificationPolicy" in text, (
-            "Composition root must import ArgmaxClassificationPolicy"
+        assert "build_classifier" in text, (
+            "Composition root must import build_classifier from infrastructure"
         )
 
 

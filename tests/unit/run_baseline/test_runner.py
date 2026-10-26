@@ -1,4 +1,4 @@
-"""Unit tests for BaselineRunner classification via candidate scoring."""
+"""Unit tests for BaselineRunner classification via the Classifier port."""
 
 from __future__ import annotations
 
@@ -9,9 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dynamic_prompt_core.application.services.classification_policy import (
-    ArgmaxClassificationPolicy,
-)
+from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
 from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
     BaselineRunner,
     ResultRow,
@@ -19,10 +17,13 @@ from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
 )
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate
+from dynamic_prompt_core.domain.models.classification import Classification
+from dynamic_prompt_core.domain.models.classification_rules import ClassificationRules
 from dynamic_prompt_core.domain.models.judgment import Judgment
 from dynamic_prompt_core.domain.prompts import CLASSIFICATION_PROMPT_V0, PromptArtifact
 from dynamic_prompt_core.domain.prompts.base import PromptLayer
 from dynamic_prompt_core.infrastructure.llm import CallResult, ResponseStatus
+from dynamic_prompt_core.infrastructure.llm.extractor import ExtractionResult, Extractor
 
 
 @dataclass
@@ -36,6 +37,15 @@ def _make_candidates() -> list[Candidate]:
     return [Candidate("0"), Candidate("1")]
 
 
+def _prompt_with_rules(rules: list[str] | None = None) -> PromptArtifact:
+    layers = PromptLayer(
+        role="role", task="task",
+        rules=rules or ["rule a", "rule b", "rule c"],
+        output_contract="contract", fallback="fallback",
+    )
+    return PromptArtifact(version="test", layers=layers, text="test")
+
+
 def _make_extract_cr() -> CallResult:
     return CallResult(
         parsed=None,
@@ -47,21 +57,65 @@ def _make_extract_cr() -> CallResult:
     )
 
 
+def _make_extract_result(status: str = "ok") -> ExtractionResult:
+    return ExtractionResult(
+        theses_raw=["a b"],
+        theses_norm=["a b"],
+        status=status,
+        latency_ms=1.0,
+        raw_extract=None,
+        call_result=_make_extract_cr(),
+    )
+
+
+def _default_classification(candidates: list[Candidate]) -> Classification:
+    return Classification(
+        selected=candidates[1],
+        judgments=(
+            Judgment(candidate=candidates[0], score=-1.5),
+            Judgment(candidate=candidates[1], score=-0.3),
+        ),
+    )
+
+
+class FakeClassifier:
+    """Stub Classifier returning a predetermined Classification or raising."""
+
+    def __init__(
+        self,
+        classification: Classification | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.classify = AsyncMock()
+        if error is not None:
+            self.classify.side_effect = error
+        else:
+            self.classify.return_value = classification
+
+
+class FakeExtractor:
+    """Stub Extractor returning a predetermined ExtractionResult."""
+
+    def __init__(self, result: ExtractionResult | None = None) -> None:
+        self.extract = AsyncMock(return_value=result)
+
+
 def _make_runner(
-    scorer: Any = None,
-    policy: Any = None,
+    classifier: Any = None,
+    extractor: Any = None,
     candidates: list[Candidate] | None = None,
+    **kwargs: Any,
 ) -> BaselineRunner:
-    task = MagicMock()
-    task.extract_theses_detailed = AsyncMock(return_value=_make_extract_cr())
+    cands = candidates or _make_candidates()
     config = RunnerConfig()
     runner = BaselineRunner(
-        task=task,
+        classifier=classifier or FakeClassifier(_default_classification(cands)),
+        extractor=extractor or FakeExtractor(_make_extract_result()),
         config=config,
         split="dev",
-        scorer=scorer or AsyncMock(),
-        policy=policy or ArgmaxClassificationPolicy(),
-        candidates=candidates or _make_candidates(),
+        candidates=cands,
+        classify_prompt=_prompt_with_rules(),
+        **kwargs,
     )
     runner._checkpoint_write = AsyncMock()
     return runner
@@ -69,15 +123,17 @@ def _make_runner(
 
 @pytest.mark.asyncio
 async def test_process_example_classifies_via_candidate_scoring() -> None:
-    """The runner uses CandidateScorer.score -> ClassificationPolicy.classify."""
+    """The runner uses Classifier.classify -> Classification."""
     candidates = _make_candidates()
-    scorer = AsyncMock()
-    scorer.score.return_value = [
-        Judgment(candidate=candidates[0], score=-1.5),
-        Judgment(candidate=candidates[1], score=-0.3),
-    ]
-    policy = ArgmaxClassificationPolicy()
-    runner = _make_runner(scorer=scorer, policy=policy, candidates=candidates)
+    classification = Classification(
+        selected=candidates[1],
+        judgments=(
+            Judgment(candidate=candidates[0], score=-1.5),
+            Judgment(candidate=candidates[1], score=-0.3),
+        ),
+    )
+    classifier = FakeClassifier(classification)
+    runner = _make_runner(classifier=classifier, candidates=candidates)
 
     runner._semaphore = asyncio.Semaphore(1)
     example = _FakeRecord(id=1, text="some text", label=1)
@@ -85,7 +141,7 @@ async def test_process_example_classifies_via_candidate_scoring() -> None:
 
     await runner._process_example(MagicMock(), example, 0, results)
 
-    scorer.score.assert_called_once()
+    classifier.classify.assert_called_once()
     row = results[0]
     assert row is not None
     assert row.classify_status == "ok"
@@ -98,9 +154,8 @@ async def test_process_example_classifies_via_candidate_scoring() -> None:
 @pytest.mark.asyncio
 async def test_process_example_scoring_failure_maps_to_failed() -> None:
     """CandidateScoringError maps to classify_status=failed."""
-    scorer = AsyncMock()
-    scorer.score.side_effect = CandidateScoringError("scoring failed")
-    runner = _make_runner(scorer=scorer)
+    classifier = FakeClassifier(error=CandidateScoringError("scoring failed"))
+    runner = _make_runner(classifier=classifier)
 
     runner._semaphore = asyncio.Semaphore(1)
     example = _FakeRecord(id=2, text="text", label=0)
@@ -118,15 +173,18 @@ async def test_process_example_scoring_failure_maps_to_failed() -> None:
 
 @pytest.mark.asyncio
 async def test_process_example_candidate_ordering_preserved() -> None:
-    """Judgment scores preserve candidate ordering from the scorer."""
+    """Judgment scores preserve candidate ordering from the classifier."""
     candidates = [Candidate("alpha"), Candidate("beta"), Candidate("gamma")]
-    scorer = AsyncMock()
-    scorer.score.return_value = [
-        Judgment(candidate=candidates[0], score=-0.5),
-        Judgment(candidate=candidates[1], score=-0.1),
-        Judgment(candidate=candidates[2], score=-0.8),
-    ]
-    runner = _make_runner(scorer=scorer, candidates=candidates)
+    classification = Classification(
+        selected=candidates[1],
+        judgments=(
+            Judgment(candidate=candidates[0], score=-0.5),
+            Judgment(candidate=candidates[1], score=-0.1),
+            Judgment(candidate=candidates[2], score=-0.8),
+        ),
+    )
+    classifier = FakeClassifier(classification)
+    runner = _make_runner(classifier=classifier, candidates=candidates)
 
     runner._semaphore = asyncio.Semaphore(1)
     example = _FakeRecord(id=3, text="text", label=1)
@@ -156,12 +214,15 @@ def test_result_row_schema_has_no_confidence_or_raw_classify() -> None:
 async def test_predicted_decision_integer_conversion() -> None:
     """Candidate("1") -> predicted_decision == 1 (int conversion succeeds)."""
     candidates = [Candidate("0"), Candidate("1")]
-    scorer = AsyncMock()
-    scorer.score.return_value = [
-        Judgment(candidate=candidates[0], score=0.2),
-        Judgment(candidate=candidates[1], score=0.8),
-    ]
-    runner = _make_runner(scorer=scorer, candidates=candidates)
+    classification = Classification(
+        selected=candidates[1],
+        judgments=(
+            Judgment(candidate=candidates[0], score=0.2),
+            Judgment(candidate=candidates[1], score=0.8),
+        ),
+    )
+    classifier = FakeClassifier(classification)
+    runner = _make_runner(classifier=classifier, candidates=candidates)
 
     runner._semaphore = asyncio.Semaphore(1)
     example = _FakeRecord(id=1, text="text", label=1)
@@ -179,12 +240,15 @@ async def test_predicted_decision_integer_conversion() -> None:
 async def test_predicted_decision_non_integer_falls_back_to_none() -> None:
     """A non-integer selected value -> predicted_decision == None."""
     candidates = [Candidate("yes"), Candidate("no")]
-    scorer = AsyncMock()
-    scorer.score.return_value = [
-        Judgment(candidate=candidates[0], score=0.8),
-        Judgment(candidate=candidates[1], score=0.2),
-    ]
-    runner = _make_runner(scorer=scorer, candidates=candidates)
+    classification = Classification(
+        selected=candidates[0],
+        judgments=(
+            Judgment(candidate=candidates[0], score=0.8),
+            Judgment(candidate=candidates[1], score=0.2),
+        ),
+    )
+    classifier = FakeClassifier(classification)
+    runner = _make_runner(classifier=classifier, candidates=candidates)
 
     runner._semaphore = asyncio.Semaphore(1)
     example = _FakeRecord(id=2, text="text", label=1)
@@ -202,12 +266,15 @@ async def test_predicted_decision_non_integer_falls_back_to_none() -> None:
 async def test_judgment_scores_populated_from_classification_judgments() -> None:
     """judgment_scores is populated from Classification.judgments."""
     candidates = [Candidate("0"), Candidate("1")]
-    scorer = AsyncMock()
-    scorer.score.return_value = [
-        Judgment(candidate=candidates[0], score=-1.5),
-        Judgment(candidate=candidates[1], score=-0.3),
-    ]
-    runner = _make_runner(scorer=scorer, candidates=candidates)
+    classification = Classification(
+        selected=candidates[1],
+        judgments=(
+            Judgment(candidate=candidates[0], score=-1.5),
+            Judgment(candidate=candidates[1], score=-0.3),
+        ),
+    )
+    classifier = FakeClassifier(classification)
+    runner = _make_runner(classifier=classifier, candidates=candidates)
 
     runner._semaphore = asyncio.Semaphore(1)
     example = _FakeRecord(id=3, text="text", label=1)
@@ -222,24 +289,19 @@ async def test_judgment_scores_populated_from_classification_judgments() -> None
 
 @pytest.mark.asyncio
 async def test_runner_skip_extraction() -> None:
-    """When skip_extraction=True, thesis extraction is skipped and only
-    candidate-scoring classification runs."""
+    """When skip_extraction=True, extraction is skipped and only classification runs."""
     candidates = _make_candidates()
-    scorer = AsyncMock()
-    scorer.score.return_value = [
-        Judgment(candidate=candidates[0], score=-1.5),
-        Judgment(candidate=candidates[1], score=-0.3),
-    ]
-    task = MagicMock()
-    task.extract_theses_detailed = AsyncMock()
+    classification = _default_classification(candidates)
+    classifier = FakeClassifier(classification)
+    extractor = FakeExtractor(_make_extract_result())
 
     runner = BaselineRunner(
-        task=task,
+        classifier=classifier,
+        extractor=extractor,
         config=RunnerConfig(),
         split="holdout",
-        scorer=scorer,
-        policy=ArgmaxClassificationPolicy(),
         candidates=candidates,
+        classify_prompt=_prompt_with_rules(),
         skip_extraction=True,
     )
     runner._checkpoint_write = AsyncMock()
@@ -250,8 +312,8 @@ async def test_runner_skip_extraction() -> None:
 
     await runner._process_example(MagicMock(), example, 0, results)
 
-    task.extract_theses_detailed.assert_not_called()
-    scorer.score.assert_called_once()
+    extractor.extract.assert_not_called()
+    classifier.classify.assert_called_once()
 
     row = results[0]
     assert row is not None
@@ -266,31 +328,16 @@ async def test_runner_skip_extraction() -> None:
 @pytest.mark.asyncio
 async def test_stats_no_double_count() -> None:
     """ok and classify_ok are separate; a fully-successful example counts each once."""
-    from dynamic_prompt_core.application.schemas.thesis import ThesisExtraction
-
     candidates = _make_candidates()
-    scorer = AsyncMock()
-    scorer.score.return_value = [
-        Judgment(candidate=candidates[0], score=-1.5),
-        Judgment(candidate=candidates[1], score=-0.3),
-    ]
-    task = MagicMock()
-    task.extract_theses_detailed = AsyncMock(
-        return_value=CallResult(
-            parsed=ThesisExtraction(theses=["a b", "c d", "e f"]),
-            raw_content=None,
-            latency_ms=1.0,
-            parse_status=None,
-            status=ResponseStatus.OK,
-        )
-    )
+    classification = _default_classification(candidates)
+    classifier = FakeClassifier(classification)
+    extractor = FakeExtractor(_make_extract_result(status="ok"))
 
     runner = BaselineRunner(
-        task=task,
+        classifier=classifier,
+        extractor=extractor,
         config=RunnerConfig(),
         split="dev",
-        scorer=scorer,
-        policy=ArgmaxClassificationPolicy(),
         candidates=candidates,
     )
     runner._checkpoint_write = AsyncMock()
@@ -308,11 +355,10 @@ async def test_stats_no_double_count() -> None:
 #  Rule extraction tests
 # --------------------------------------------------------------------------- #
 def test_default_prompt_rules_extracted() -> None:
-    """The default classification prompt's rules are extracted at construction."""
-    runner = _make_runner()
+    """The default classification prompt has no rules (empty list)."""
     layers = CLASSIFICATION_PROMPT_V0.layers
-    expected = list(layers.rules) if layers else []
-    assert runner._rules == expected
+    expected = tuple(layers.rules) if layers else ()
+    assert expected == ()
 
 
 def test_non_default_prompt_with_valid_layers_rules_extracted() -> None:
@@ -329,54 +375,67 @@ def test_non_default_prompt_with_valid_layers_rules_extracted() -> None:
         layers=custom_layers,
         text="rendered text",
     )
-    task = MagicMock()
     runner = BaselineRunner(
-        task=task,
+        classifier=FakeClassifier(_default_classification(_make_candidates())),
+        extractor=FakeExtractor(_make_extract_result()),
         config=RunnerConfig(),
         split="dev",
-        scorer=AsyncMock(),
-        policy=ArgmaxClassificationPolicy(),
         candidates=_make_candidates(),
         classify_prompt=custom_prompt,
     )
-    assert runner._rules == ["custom rule 1", "custom rule 2", "custom rule 3"]
+    assert runner._rules == ClassificationRules(
+        rules=("custom rule 1", "custom rule 2", "custom rule 3"),
+    )
 
 
-def test_non_default_prompt_with_none_layers_raises() -> None:
-    """A non-default prompt with None layers raises at construction."""
+@pytest.mark.asyncio
+async def test_non_default_prompt_with_none_layers_uses_empty_rules() -> None:
+    """A non-default prompt with None layers yields empty rules; the runner
+    sets predicted_decision=0 and classify_status=ok without calling the
+    classifier."""
     malformed_prompt = PromptArtifact(
         version="classify-v1",
         layers=None,
         text="some text",
     )
-    task = MagicMock()
-    with pytest.raises(ValueError, match="no layers"):
-        BaselineRunner(
-            task=task,
-            config=RunnerConfig(),
-            split="dev",
-            scorer=AsyncMock(),
-            policy=ArgmaxClassificationPolicy(),
-            candidates=_make_candidates(),
-            classify_prompt=malformed_prompt,
-        )
+    classifier = FakeClassifier(_default_classification(_make_candidates()))
+    extractor = FakeExtractor(_make_extract_result())
+    runner = BaselineRunner(
+        classifier=classifier,
+        extractor=extractor,
+        config=RunnerConfig(),
+        split="dev",
+        candidates=_make_candidates(),
+        classify_prompt=malformed_prompt,
+    )
+    runner._checkpoint_write = AsyncMock()
+    runner._semaphore = asyncio.Semaphore(1)
+    assert runner._rules.rules == ()
+
+    example = _FakeRecord(id=1, text="text", label=0)
+    results: list[ResultRow | None] = [None]
+    await runner._process_example(MagicMock(), example, 0, results)
+
+    classifier.classify.assert_not_called()
+    row = results[0]
+    assert row is not None
+    assert row.predicted_decision == 0
+    assert row.selected_candidate == "0"
+    assert row.classify_status == "ok"
 
 
 @pytest.mark.asyncio
-async def test_rules_passed_to_scorer_on_score() -> None:
-    """The runner passes extracted rules to scorer.score()."""
+async def test_rules_passed_to_classifier_on_classify() -> None:
+    """The runner passes extracted rules to classifier.classify()."""
     candidates = _make_candidates()
-    scorer = AsyncMock()
-    scorer.score.return_value = [
-        Judgment(candidate=candidates[0], score=0.2),
-        Judgment(candidate=candidates[1], score=0.8),
-    ]
-    runner = _make_runner(scorer=scorer, candidates=candidates)
+    classification = _default_classification(candidates)
+    classifier = FakeClassifier(classification)
+    runner = _make_runner(classifier=classifier, candidates=candidates)
     runner._semaphore = asyncio.Semaphore(1)
     example = _FakeRecord(id=1, text="text", label=1)
     results: list[ResultRow | None] = [None]
 
     await runner._process_example(MagicMock(), example, 0, results)
 
-    call_args = scorer.score.call_args
-    assert call_args.args[2] == runner._rules
+    call_args = classifier.classify.call_args
+    assert call_args.args[1] == runner._rules

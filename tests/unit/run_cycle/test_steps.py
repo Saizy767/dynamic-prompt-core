@@ -245,8 +245,8 @@ def test_run_active_on_dev_threads_scorer_policy_candidates(build_mock_deps):
     ):
         asyncio.run(run_active_on_dev(state, deps, config, "config.toml"))
 
-    assert captured["scorer"] is deps.candidate_scorer
-    assert captured["policy"] is deps.classification_policy
+    assert captured["classifier"] is deps.classifier
+    assert captured["extractor"] is deps.extractor
     assert list(deps.candidates) == captured["candidates"]
 
 
@@ -304,8 +304,8 @@ def test_run_active_on_dev_passes_active_prompt_with_rules(build_mock_deps):
             run_new_on_dev(CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run")
         )
 
-    assert captured["scorer"] is deps.candidate_scorer
-    assert captured["policy"] is deps.classification_policy
+    assert captured["classifier"] is deps.classifier
+    assert captured["extractor"] is deps.extractor
     assert list(deps.candidates) == captured["candidates"]
 
 
@@ -333,8 +333,8 @@ def test_run_holdout_threads_scorer_policy_candidates(build_mock_deps):
     ):
         asyncio.run(run_holdout(CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"))
 
-    assert captured["scorer"] is deps.candidate_scorer
-    assert captured["policy"] is deps.classification_policy
+    assert captured["classifier"] is deps.classifier
+    assert captured["extractor"] is deps.extractor
     assert list(deps.candidates) == captured["candidates"]
     assert captured["skip_extraction"] is True
 
@@ -374,16 +374,16 @@ def test_all_runners_receive_same_scorer_and_policy_instances(build_mock_deps):
         asyncio.run(run_holdout(CLASSIFICATION_PROMPT_V0, config, "config.toml", deps, "test-run"))
 
     assert len(captured_list) == 3
-    scorers = [c["scorer"] for c in captured_list]
-    policies = [c["policy"] for c in captured_list]
+    classifiers = [c["classifier"] for c in captured_list]
+    extractors = [c["extractor"] for c in captured_list]
     candidates = [c["candidates"] for c in captured_list]
-    assert all(s is scorers[0] for s in scorers)
-    assert all(p is policies[0] for p in policies)
+    assert all(cl is classifiers[0] for cl in classifiers)
+    assert all(ex is extractors[0] for ex in extractors)
     assert all(c == candidates[0] for c in candidates)
 
 
-def test_run_cycle_deps_requires_candidate_scorer():
-    """RunCycleDeps construction without candidate_scorer raises TypeError."""
+def test_run_cycle_deps_requires_classifier():
+    """RunCycleDeps construction without classifier raises TypeError."""
     from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
         RunCycleDeps,
     )
@@ -396,13 +396,13 @@ def test_run_cycle_deps_requires_candidate_scorer():
             dataset_repository=MagicMock(),
             embedding_client=MagicMock(),
             normalizer=MagicMock(),
-            classification_policy=MagicMock(),
+            extractor=MagicMock(),
             candidates=(MagicMock(),),
         )
 
 
-def test_run_cycle_deps_requires_classification_policy():
-    """RunCycleDeps construction without classification_policy raises TypeError."""
+def test_run_cycle_deps_requires_extractor():
+    """RunCycleDeps construction without extractor raises TypeError."""
     from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
         RunCycleDeps,
     )
@@ -415,7 +415,7 @@ def test_run_cycle_deps_requires_classification_policy():
             dataset_repository=MagicMock(),
             embedding_client=MagicMock(),
             normalizer=MagicMock(),
-            candidate_scorer=MagicMock(),
+            classifier=MagicMock(),
             candidates=(MagicMock(),),
         )
 
@@ -434,8 +434,8 @@ def test_run_cycle_deps_requires_candidates():
             dataset_repository=MagicMock(),
             embedding_client=MagicMock(),
             normalizer=MagicMock(),
-            candidate_scorer=MagicMock(),
-            classification_policy=MagicMock(),
+            classifier=MagicMock(),
+            extractor=MagicMock(),
         )
 
 

@@ -1,48 +1,46 @@
-"""Composition-root factory for the candidate scorer.
+"""Composition-root factory for the classifier.
 
-Constructs a ``LLMLogitCandidateScorer`` with all infrastructure dependencies
-(prompt builder, tokenizer, model adapter, logit scorer) from a
-``ScorerBackendConfig``.  Callers receive the result through the
-``CandidateScorer`` port; this module may import ``transformers`` and
-infrastructure scoring modules.
+Constructs an ``LLMLogitClassifier`` with all infrastructure dependencies
+from a ``ScorerBackendConfig``.  Callers receive the result through the
+``Classifier`` port.
 """
 from __future__ import annotations
 
 import logging
 
-from dynamic_prompt_core.application.ports.outbound.candidate_scorer import (
-    CandidateScorer,
-)
+from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
+from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.infrastructure.llm.scoring.config import ScorerBackendConfig
 
 log = logging.getLogger(__name__)
 
 
-def build_candidate_scorer(config: ScorerBackendConfig) -> CandidateScorer:
-    """Construct a ``CandidateScorer`` backed by LLM logits.
+def build_classifier(
+    config: ScorerBackendConfig,
+    candidates: list[Candidate],
+) -> Classifier:
+    """Construct a ``Classifier`` backed by LLM logits.
 
-    Dispatches on ``config.backend``: ``"huggingface"`` loads the model via
-    ``AutoModelForCausalLM.from_pretrained`` and wires the Hugging Face
-    adapters; ``"gguf"`` lazy-imports the GGUF adapters and loads the model
-    via ``llama-cpp-python``.  Both return an ``LLMLogitCandidateScorer`` with
-    the shared ``ScoringPromptBuilder`` and ``LogitScorer``.  The result
-    satisfies the ``CandidateScorer`` port contract.
+    Dispatches on ``config.backend``: ``"huggingface"``, ``"gguf"``, or
+    ``"llama_server"``.  All return an ``LLMLogitClassifier`` with the
+    shared ``ClassifierPromptBuilder`` (loaded from the classifier system
+    prompt resource) and ``LogitScorer``.
     """
-    from dynamic_prompt_core.infrastructure.llm.scoring.candidate_scorer import (
-        LLMLogitCandidateScorer,
+    from dynamic_prompt_core.infrastructure.llm.classifier import LLMLogitClassifier
+    from dynamic_prompt_core.infrastructure.llm.prompts import load_prompt
+    from dynamic_prompt_core.infrastructure.llm.scoring.classifier_prompt_builder import (
+        ClassifierPromptBuilder,
     )
     from dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer import (
         LogitScorer,
     )
-    from dynamic_prompt_core.infrastructure.llm.scoring.prompt_builder import (
-        ScoringPromptBuilder,
-    )
 
-    prompt_builder = ScoringPromptBuilder()
+    system_prompt = load_prompt("classifier")
+    prompt_builder = ClassifierPromptBuilder(system_prompt=system_prompt)
     logit_scorer = LogitScorer()
 
     log.info(
-        "Building candidate scorer: backend=%s, model_path=%s",
+        "Building classifier: backend=%s, model_path=%s",
         config.backend, config.model_path,
     )
     if config.backend == "gguf":
@@ -52,11 +50,12 @@ def build_candidate_scorer(config: ScorerBackendConfig) -> CandidateScorer:
     else:
         tokenizer, model = _build_huggingface_adapters(config)
 
-    return LLMLogitCandidateScorer(
+    return LLMLogitClassifier(
         prompt_builder=prompt_builder,
         tokenizer=tokenizer,  # type: ignore[arg-type]
         model=model,  # type: ignore[arg-type]
         logit_scorer=logit_scorer,
+        candidates=candidates,
     )
 
 

@@ -19,7 +19,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -28,16 +27,16 @@ from typing import Any
 
 import aiohttp
 
-from dynamic_prompt_core.application.ports.outbound.candidate_scorer import CandidateScorer
-from dynamic_prompt_core.application.schemas import ThesisExtraction
-from dynamic_prompt_core.application.services.classification_policy import ClassificationPolicy
+from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
 from dynamic_prompt_core.application.services.metrics import metrics as metrics_module
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate
+from dynamic_prompt_core.domain.models.classification_rules import (
+    classification_rules_from_artifact,
+)
 from dynamic_prompt_core.domain.models.dataset import Record
 from dynamic_prompt_core.domain.prompts import (
     CLASSIFICATION_PROMPT_V0,
-    EXTRACTION_PROMPT,
     PromptArtifact,
 )
 from dynamic_prompt_core.infrastructure.data.writer import load_artifact
@@ -46,7 +45,7 @@ from dynamic_prompt_core.infrastructure.llm import (
     CallResult,
     ResponseStatus,
 )
-from dynamic_prompt_core.infrastructure.nlp import normalize_theses
+from dynamic_prompt_core.infrastructure.llm.extractor import Extractor
 
 log = logging.getLogger(__name__)
 
@@ -132,47 +131,15 @@ class ResultRow:
 
 
 # --------------------------------------------------------------------------- #
-#  Status mapping + repair
-# --------------------------------------------------------------------------- #
-_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", re.DOTALL)
-
-
-def _try_repair(raw_content: str | None, model_cls: type) -> Any | None:
-    """Attempt to repair a malformed response by stripping markdown fences."""
-    if not raw_content:
-        return None
-    stripped = raw_content.strip()
-    m = _FENCE_RE.match(stripped)
-    if m:
-        candidate = m.group(1).strip()
-        try:
-            return model_cls.model_validate_json(candidate)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-    return None
-
-
-def _map_call_status(call_result: CallResult, model_cls: type) -> tuple[str, Any | None]:
-    """Map a CallResult to a runner status and parsed model (with repair)."""
-    if call_result.parsed is not None:
-        return _RUNNER_STATUS_OK, call_result.parsed
-    repaired = _try_repair(call_result.raw_content, model_cls)
-    if repaired is not None:
-        return _RUNNER_STATUS_REPAIRED, repaired
-    return _RUNNER_STATUS_FAILED, None
-
-
-# --------------------------------------------------------------------------- #
 #  BaselineRunner
 # --------------------------------------------------------------------------- #
 class BaselineRunner:
     def __init__(
         self,
-        task: AsyncTask,
+        classifier: Classifier,
+        extractor: Extractor,
         config: RunnerConfig,
         split: str,
-        scorer: CandidateScorer,
-        policy: ClassificationPolicy,
         candidates: list[Candidate],
         run_id: str | None = None,
         dataset_artifact: str | None = None,
@@ -181,9 +148,8 @@ class BaselineRunner:
         backend_metadata: dict[str, Any] | None = None,
         skip_extraction: bool = False,
     ) -> None:
-        self._task = task
-        self._scorer = scorer
-        self._policy = policy
+        self._classifier = classifier
+        self._extractor = extractor
         self._candidates = candidates
         self._config = config
         self._split = split
@@ -202,9 +168,8 @@ class BaselineRunner:
         else:
             self._classify_prompt = CLASSIFICATION_PROMPT_V0
             self._prompt_version = config.prompt_version
-        self._extract_prompt = EXTRACTION_PROMPT
 
-        self._rules = self._extract_rules()
+        self._rules = classification_rules_from_artifact(self._classify_prompt)
 
         self._dataset_artifact = dataset_artifact or config.dataset_artifact
         self._duration = duration
@@ -223,21 +188,6 @@ class BaselineRunner:
         }
 
     # -- paths -------------------------------------------------------------- #
-    def _extract_rules(self) -> list[str]:
-        """Extract classification rules from the active prompt artifact.
-
-        Uses the structured ``PromptArtifact.layers.rules`` as the source of
-        truth.  Raises a clear error for a non-default prompt with missing
-        layers rather than silently substituting default rules.
-        """
-        layers = self._classify_prompt.layers
-        if layers is None:
-            raise ValueError(
-                f"active prompt {self._classify_prompt.version!r} has no layers; "
-                "cannot extract classification rules"
-            )
-        return list(layers.rules)
-
     def _results_dir(self) -> str:
         return os.path.join(self._output_dir, "result_cycle")
 
@@ -295,7 +245,7 @@ class BaselineRunner:
         backend_metadata = self._backend_metadata
         if backend_metadata is not None:
             return backend_metadata
-        describe_fn = getattr(self._scorer, "describe", None)
+        describe_fn = getattr(self._classifier, "describe", None)
         if describe_fn is not None:
             result = describe_fn()
             if isinstance(result, dict):
@@ -419,91 +369,59 @@ class BaselineRunner:
     ) -> None:
         assert self._semaphore is not None
         async with self._semaphore:
-            if self._skip_extraction:
-                extract_cr = CallResult(
-                    parsed=None,
-                    raw_content=None,
-                    latency_ms=0.0,
-                    parse_status=None,
-                    status=ResponseStatus.UNEXPECTED_SHAPE,
+            # -- Classification (runs first) -- #
+            classify_start = time.monotonic()
+            if not self._rules.rules:
+                log.info(
+                    "BaselineRunner: no classification rules for id=%s, "
+                    "setting predicted_decision=0 without classifier call",
+                    example.id,
                 )
-                extract_status = "skipped"
-                theses_raw: list[str] = []
-                theses_norm: list[str] = []
+                predicted_decision = 0
+                selected_candidate = "0"
+                classify_status = _RUNNER_STATUS_OK
+                judgment_scores: dict[str, float] = {}
             else:
                 try:
-                    extract_cr = await self._task.extract_theses_detailed(
-                        session,
-                        example.text,
-                        ThesisExtraction,
-                        system_prompt=self._extract_prompt.text,
-                        true_val=example.label,
+                    classification = await self._classifier.classify(
+                        example.text, self._rules,
                     )
-                except Exception as exc:
-                    log.exception("extract_theses crashed for id=%s: %s", example.id, exc)
-                    extract_cr = CallResult(
-                        parsed=None,
-                        raw_content=None,
-                        latency_ms=0.0,
-                        parse_status=None,
-                        status=ResponseStatus.UNEXPECTED_SHAPE,
-                        error=str(exc),
-                    )
-
-                extract_status, extract_parsed = _map_call_status(extract_cr, ThesisExtraction)
-
-                theses_raw = list(extract_parsed.theses) if extract_parsed else []
-                theses_norm = normalize_theses(theses_raw, self._language) if theses_raw else []
-
-            classify_start = time.monotonic()
-            try:
-                score_start = time.monotonic()
-                log.info(
-                    "BaselineRunner: scorer.score START id=%s, %d candidates",
-                    example.id,
-                    len(self._candidates),
-                )
-                judgments = await self._scorer.score(example.text, self._candidates, self._rules)
-                score_latency_ms = (time.monotonic() - score_start) * 1000
-                log.info(
-                    "BaselineRunner: scorer.score END id=%s in %.2fms",
-                    example.id,
-                    score_latency_ms,
-                )
-
-                policy_start = time.monotonic()
-                classification = self._policy.classify(judgments)
-                policy_latency_ms = (time.monotonic() - policy_start) * 1000
-                log.info(
-                    "BaselineRunner: policy.classify id=%s in %.2fms",
-                    example.id,
-                    policy_latency_ms,
-                )
-                classify_status = _RUNNER_STATUS_OK
-                selected_candidate = classification.selected.value
-                try:
-                    predicted_decision = int(classification.selected.value)
-                except (ValueError, TypeError):
+                    classify_status = _RUNNER_STATUS_OK
+                    selected_candidate = classification.selected.value
+                    try:
+                        predicted_decision = int(classification.selected.value)
+                    except (ValueError, TypeError):
+                        predicted_decision = None
+                    judgment_scores = {
+                        j.candidate.value: j.score for j in classification.judgments
+                    }
+                except CandidateScoringError as exc:
+                    log.exception("classification failed for id=%s: %s", example.id, exc)
+                    classify_status = _RUNNER_STATUS_FAILED
                     predicted_decision = None
-                judgment_scores = {j.candidate.value: j.score for j in classification.judgments}
-            except CandidateScoringError as exc:
-                log.exception("candidate scoring failed for id=%s: %s", example.id, exc)
-                classify_status = _RUNNER_STATUS_FAILED
-                predicted_decision = None
-                selected_candidate = None
-                judgment_scores = {}
-            except Exception as exc:
-                log.exception("classify crashed for id=%s: %s", example.id, exc)
-                classify_status = _RUNNER_STATUS_FAILED
-                predicted_decision = None
-                selected_candidate = None
-                judgment_scores = {}
+                    selected_candidate = None
+                    judgment_scores = {}
+                except Exception as exc:
+                    log.exception("classify crashed for id=%s: %s", example.id, exc)
+                    classify_status = _RUNNER_STATUS_FAILED
+                    predicted_decision = None
+                    selected_candidate = None
+                    judgment_scores = {}
             classify_latency_ms = (time.monotonic() - classify_start) * 1000
 
             if classify_status == _RUNNER_STATUS_OK:
                 self._stats["classify_ok"] += 1
             else:
                 self._stats["classify_failed"] += 1
+
+            # -- Extraction (runs after classification) -- #
+            if self._skip_extraction:
+                extract_result = Extractor.skipped()
+            else:
+                extract_result = await self._extractor.extract(
+                    session, example.text, true_val=example.label,
+                )
+                self._update_stats(extract_result.call_result, extract_result.status)
 
             row = ResultRow(
                 id=example.id,
@@ -512,17 +430,14 @@ class BaselineRunner:
                 predicted_decision=predicted_decision,
                 selected_candidate=selected_candidate,
                 judgment_scores=judgment_scores,
-                theses_raw=theses_raw,
-                theses_norm=theses_norm,
-                extract_status=extract_status,
+                theses_raw=extract_result.theses_raw,
+                theses_norm=extract_result.theses_norm,
+                extract_status=extract_result.status,
                 classify_status=classify_status,
-                extract_latency_ms=extract_cr.latency_ms,
+                extract_latency_ms=extract_result.latency_ms,
                 classify_latency_ms=classify_latency_ms,
-                raw_extract=extract_cr.raw_content,
+                raw_extract=extract_result.raw_extract,
             )
-
-            if not self._skip_extraction:
-                self._update_stats(extract_cr, extract_status)
 
             results[index] = row
             await self._checkpoint_write(row)
@@ -627,21 +542,19 @@ async def _main_async(args: argparse.Namespace) -> None:
         raw_config = tomllib.load(f)
     model_path = raw_config.get("llm", {}).get("model_path", "model")
 
-    from dynamic_prompt_core.application.services.classification_policy import (
-        ArgmaxClassificationPolicy,
+    from dynamic_prompt_core.infrastructure.llm.classifier_factory import (
+        build_classifier,
     )
+    from dynamic_prompt_core.infrastructure.llm.extractor import Extractor
     from dynamic_prompt_core.infrastructure.llm.scoring.config import (
         scorer_backend_config_from_toml,
     )
-    from dynamic_prompt_core.infrastructure.llm.scoring.factory import (
-        build_candidate_scorer,
-    )
 
-    scorer = build_candidate_scorer(
-        scorer_backend_config_from_toml(raw_config, default_model_path=model_path)
-    )
-    policy = ArgmaxClassificationPolicy()
     candidates = [Candidate(v) for v in config.candidates]
+    classifier = build_classifier(
+        scorer_backend_config_from_toml(raw_config, default_model_path=model_path),
+        candidates,
+    )
 
     cycles = args.cycles
     for cycle in range(1, cycles + 1):
@@ -659,13 +572,13 @@ async def _main_async(args: argparse.Namespace) -> None:
             log_path=log_path,
             run_id=cycle_run_id,
         )
+        extractor = Extractor(task=task, language=config.language)
 
         runner = BaselineRunner(
-            task=task,
+            classifier=classifier,
+            extractor=extractor,
             config=config,
             split=args.split,
-            scorer=scorer,
-            policy=policy,
             candidates=candidates,
             run_id=cycle_run_id,
             dataset_artifact=args.dataset_artifact,

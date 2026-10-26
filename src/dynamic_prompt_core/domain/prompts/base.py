@@ -74,16 +74,3 @@ class PromptArtifact:
                 self, "sha256",
                 hashlib.sha256(self.text.encode("utf-8")).hexdigest()[:16],
             )
-
-
-def build_classification_prompt(
-    version: str, layers: PromptLayer
-) -> PromptArtifact:
-    """Assemble a classification prompt artifact, enforcing 3-5 rules."""
-    if not 3 <= len(layers.rules) <= 5:
-        raise ValueError(
-            f"classification prompt must have 3-5 rules, "
-            f"got {len(layers.rules)}"
-        )
-    text = render(layers)
-    return PromptArtifact(version=version, layers=layers, text=text)
