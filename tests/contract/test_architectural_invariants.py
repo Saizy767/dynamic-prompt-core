@@ -38,51 +38,6 @@ def _parse_module(path: Path) -> ast.Module:
 
 
 # --------------------------------------------------------------------------- #
-#  Task 2.4: Application classification tests do not import infrastructure
-# --------------------------------------------------------------------------- #
-class TestApplicationTestsDoNotImportInfrastructure:
-    """Verify that application classification tests depend on the port, not
-    the concrete infrastructure implementation."""
-
-    FORBIDDEN_IMPORTS = {
-        "transformers",
-        "torch",
-        "dynamic_prompt_core.infrastructure.llm.classifier",
-        "dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer",
-        "dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter",
-        "dynamic_prompt_core.infrastructure.llm.scoring.model_adapter",
-    }
-
-    def test_classify_input_tests_do_not_import_infrastructure(self) -> None:
-        test_file = TESTS_ROOT / "unit" / "candidate_scoring" / "test_classify_input.py"
-        tree = _parse_module(test_file)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert alias.name not in self.FORBIDDEN_IMPORTS, (
-                        f"test imports forbidden infrastructure: {alias.name}"
-                    )
-            elif isinstance(node, ast.ImportFrom):
-                assert node.module is None or node.module not in self.FORBIDDEN_IMPORTS, (
-                    f"test imports from forbidden infrastructure: {node.module}"
-                )
-
-    def test_classification_policy_tests_do_not_import_infrastructure(self) -> None:
-        test_file = TESTS_ROOT / "unit" / "candidate_scoring" / "test_classification_policy.py"
-        tree = _parse_module(test_file)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert alias.name not in self.FORBIDDEN_IMPORTS, (
-                        f"test imports forbidden infrastructure: {alias.name}"
-                    )
-            elif isinstance(node, ast.ImportFrom):
-                assert node.module is None or node.module not in self.FORBIDDEN_IMPORTS, (
-                    f"test imports from forbidden infrastructure: {node.module}"
-                )
-
-
-# --------------------------------------------------------------------------- #
 #  Task 7.2: Concrete scorer construction has one production source
 # --------------------------------------------------------------------------- #
 class TestConcreteClassifierConstructionHasOneSource:

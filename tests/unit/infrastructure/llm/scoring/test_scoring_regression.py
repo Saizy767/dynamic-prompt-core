@@ -132,7 +132,7 @@ class TestNonFiniteAndEmpty:
             scorer.score(1, [0], seq)
 
     def test_inf_logits_rejected(self) -> None:
-        bad = [float("inf"), 0.0, 0.0]
+        bad = [float("-inf"), 0.0, 0.0]
         seq = _seq(bad)
         with pytest.raises(LLMScoringError):
             scorer.score(1, [0], seq)

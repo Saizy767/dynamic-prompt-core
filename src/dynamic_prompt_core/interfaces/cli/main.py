@@ -163,7 +163,7 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
         scorer_backend_config_from_toml(toml_config, default_model_path=model_path),
         list(candidates),
     )
-    extractor = Extractor(task=llm, language="ru")  # type: ignore[arg-type]
+    extractor = Extractor(task=llm, language=toml_config.get("runner", {}).get("language", "ru"))  # type: ignore[arg-type]
 
     teacher_llm_client = None
     try:

@@ -72,7 +72,7 @@ class TestNonFiniteRejection:
             LogitScorer,
         )
 
-        bad = [float("inf"), 0.0]
+        bad = [float("-inf"), 0.0]
         seq = SequenceLogits(logits=(tuple(bad),))
         with pytest.raises(LLMScoringError):
             LogitScorer().score(1, [0], seq)

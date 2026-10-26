@@ -1,12 +1,10 @@
 """Outbound port: contract for key-phrase extraction."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     import aiohttp
-
-    from dynamic_prompt_core.infrastructure.llm.extractor import ExtractionResult
 
 
 @runtime_checkable
@@ -22,11 +20,11 @@ class Extractor(Protocol):
         session: aiohttp.ClientSession,
         text: str,
         true_val: int | None = None,
-    ) -> ExtractionResult:
+    ) -> Any:
         """Extract key phrases from ``text``."""
         ...
 
     @staticmethod
-    def skipped() -> ExtractionResult:
+    def skipped() -> Any:
         """Return a skipped extraction result."""
         ...

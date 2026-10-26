@@ -154,7 +154,6 @@ class BaselineRunner:
         self._config = config
         self._split = split
         self._run_id = run_id or f"run-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-        self._language = config.language
         self._output_dir = config.output_dir
         self._concurrency = config.concurrency
         self._checkpoint_interval = config.checkpoint_interval

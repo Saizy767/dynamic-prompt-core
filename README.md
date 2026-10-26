@@ -26,11 +26,10 @@
 
 Модель работает при `temperature=0`. Классификация выполняется через
 candidate scoring: модель оценивает каждый явный кандидат (класс) независимо,
-а приложение выбирает финальную классификацию через политику.
+а классификатор выбирает финальную классификацию.
 
 ```
-CandidateScorer.score(text, candidates) → Judgment[]
-    → ClassificationPolicy.classify(judgments) → Classification
+Classifier.classify(text, rules) → Classification
 ```
 
 Оценка кандидата — это mean candidate-token log-probability: ранжирующий

@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -67,7 +67,7 @@ class TestManifestWrite:
         assert data["run_id"] == "test-run"
 
     def test_no_manifest_without_describe(self, tmp_path: Path) -> None:
-        classifier = AsyncMock()
+        classifier = MagicMock()
         runner = _make_runner(classifier, tmp_path)
         runner._write_manifest(dataset_fingerprint=None)
         assert not os.path.exists(runner._manifest_path())
