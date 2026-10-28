@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -251,6 +252,10 @@ class BaselineRunner:
                 return dict(result)
         return None
 
+    def _dataset_fingerprint(self) -> str:
+        with open(self._dataset_artifact, "rb") as f:
+            return hashlib.file_digest(f, "sha256").hexdigest()
+
     def _write_manifest(self, dataset_fingerprint: str | None) -> None:
         backend_metadata = self._resolve_backend_metadata()
         if backend_metadata is None:
@@ -274,7 +279,7 @@ class BaselineRunner:
         os.makedirs(self._manifest_dir(), exist_ok=True)
         write_manifest(self._manifest_path(), meta)
 
-    def _verify_resume_identity(self) -> None:
+    def _verify_resume_identity(self, dataset_fingerprint: str | None = None) -> None:
         manifest_path = self._manifest_path()
         if not os.path.exists(manifest_path):
             return
@@ -296,6 +301,7 @@ class BaselineRunner:
             prompt_sha256=prompt_sha256,
             split=self._split,
             dataset_path=self._dataset_artifact,
+            dataset_fingerprint=dataset_fingerprint,
             timestamp=self._timestamp,
         )
         result = verify_resume_identity(recorded, current)
@@ -476,8 +482,9 @@ class BaselineRunner:
         if not examples:
             raise ValueError(f"split '{self._split}' has no examples")
 
-        self._verify_resume_identity()
-        self._write_manifest(dataset_fingerprint=None)
+        dataset_fingerprint = self._dataset_fingerprint()
+        self._verify_resume_identity(dataset_fingerprint)
+        self._write_manifest(dataset_fingerprint)
 
         if self._duration is not None:
             if self._duration <= 0:
@@ -527,7 +534,6 @@ class BaselineRunner:
 async def _main_async(args: argparse.Namespace) -> None:
     config = RunnerConfig.from_config(args.config)
 
-    pass  # logging configured by composition root
 
     run_id = args.run_id
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -539,7 +545,6 @@ async def _main_async(args: argparse.Namespace) -> None:
 
     with open(args.config, "rb") as f:
         raw_config = tomllib.load(f)
-    model_path = raw_config.get("llm", {}).get("model_path", "model")
 
     from dynamic_prompt_core.infrastructure.llm.classifier_factory import (
         build_classifier,
@@ -551,7 +556,7 @@ async def _main_async(args: argparse.Namespace) -> None:
 
     candidates = [Candidate(v) for v in config.candidates]
     classifier = build_classifier(
-        scorer_backend_config_from_toml(raw_config, default_model_path=model_path),
+        scorer_backend_config_from_toml(raw_config),
         candidates,
     )
 

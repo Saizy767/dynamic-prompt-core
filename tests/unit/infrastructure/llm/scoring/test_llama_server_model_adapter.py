@@ -1,17 +1,38 @@
-"""Unit tests for the llama-server HTTP model adapter."""
+"""Unit tests for the llama-server HTTP model adapter (logit_bias forcing)."""
 from __future__ import annotations
 
 from typing import Any
 
+import aiohttp
 import pytest
 
 from dynamic_prompt_core.infrastructure.llm.scoring.errors import LLMScoringError
 from dynamic_prompt_core.infrastructure.llm.scoring.llama_server_model_adapter import (
     LlamaServerCausalLMAdapter,
-    _build_logits_from_logprobs,
-    _parse_v1_logprobs,
 )
-from dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer import _log_probability
+from dynamic_prompt_core.infrastructure.llm.scoring.logit_scorer import LogitScorer
+
+
+def _completion_response(token_id: int, logprob: float) -> dict[str, Any]:
+    return {
+        "choices": [
+            {
+                "index": 0,
+                "logprobs": {
+                    "content": [
+                        {
+                            "id": token_id,
+                            "token": "x",
+                            "bytes": [120],
+                            "logprob": logprob,
+                            "top_logprobs": [],
+                        }
+                    ]
+                },
+                "finish_reason": "length",
+            }
+        ]
+    }
 
 
 class _MockResponse:
@@ -35,7 +56,7 @@ class _MockResponse:
 
 
 class _MockSession:
-    def __init__(self, responses: list[_MockResponse]) -> None:
+    def __init__(self, responses: list[Any]) -> None:
         self._responses = list(responses)
         self.closed = False
         self.post_calls: list[dict[str, Any]] = []
@@ -44,278 +65,247 @@ class _MockSession:
         self.post_calls.append({"url": url, "json": json})
         if not self._responses:
             raise AssertionError("no more mock responses")
-        return self._responses.pop(0)
+        nxt = self._responses.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
 
     async def close(self) -> None:
         self.closed = True
 
 
-class TestBuildLogitsFromLogprobs:
-    def test_basic_conversion(self) -> None:
-        token_logprobs = [None, -0.5, -1.2]
-        token_ids = [1, 2, 3]
-        result = _build_logits_from_logprobs(token_logprobs, token_ids, vocab_size=10)
-        assert len(result) == 3
-        assert len(result[0]) == 10
-        # Position 0 predicts token_ids[1]=2 with logprob token_logprobs[1]=-0.5
-        assert result[0][2] == pytest.approx(-0.5)
-        # Position 1 predicts token_ids[2]=3 with logprob token_logprobs[2]=-1.2
-        assert result[1][3] == pytest.approx(-1.2)
+def _make_adapter(
+    responses: list[Any],
+) -> tuple[LlamaServerCausalLMAdapter, _MockSession]:
+    adapter = LlamaServerCausalLMAdapter(
+        endpoint="http://127.0.0.1:8080", timeout=5, max_concurrency=2
+    )
+    session = _MockSession(responses)
+    adapter._session = session
+    return adapter, session
 
-    def test_log_softmax_preserves_real_logprob(self) -> None:
-        """The core invariant: log_softmax(logits[i])[token_ids[i+1]] == token_logprobs[i+1].
 
-        This is the semantic contract that was broken by the _LOGIT_FLOOR
-        constant: with -100.0 for all other tokens, log_softmax collapsed
-        every token's log-prob to ~0.0, producing 50/50 for all candidates.
-        """
-        token_logprobs = [None, -0.7, -0.3]
-        token_ids = [1, 2, 3]
-        result = _build_logits_from_logprobs(token_logprobs, token_ids, vocab_size=10)
-        # Position 0 predicts token 2 with logprob -0.7
-        assert _log_probability(result[0], 2) == pytest.approx(-0.7, abs=1e-9)
-        # Position 1 predicts token 3 with logprob -0.3
-        assert _log_probability(result[1], 3) == pytest.approx(-0.3, abs=1e-9)
-
-    def test_other_tokens_not_floor(self) -> None:
-        """Non-actual tokens must use the correct formula, not _LOGIT_FLOOR."""
-        result = _build_logits_from_logprobs([None, -0.5], [1, 2], vocab_size=10)
-        other_logits = [result[0][i] for i in range(10) if i != 2]
-        assert not all(v == -100.0 for v in other_logits)
-        assert all(v < -0.5 for v in other_logits)
-
-    def test_none_logprob_first_position(self) -> None:
-        result = _build_logits_from_logprobs([None], [5], vocab_size=10)
-        assert all(v == -100.0 for v in result[0])
-
-    def test_none_logprob_at_scoring_position_raises(self) -> None:
-        """None at a position with a successor token must raise, not silently floor."""
-        with pytest.raises(LLMScoringError, match="is None at position"):
-            _build_logits_from_logprobs([None, None, -0.5], [1, 2, 3], vocab_size=10)
-
-    def test_none_logprob_mid_sequence_raises(self) -> None:
-        """None in the middle of the sequence (not just position 0) must raise."""
-        with pytest.raises(LLMScoringError, match="is None at position"):
-            _build_logits_from_logprobs([None, -0.3, None, -0.7], [1, 2, 3, 4], vocab_size=10)
-
-    def test_nan_rejected(self) -> None:
-        with pytest.raises(LLMScoringError, match="NaN"):
-            _build_logits_from_logprobs([None, float("nan")], [0, 1], vocab_size=10)
-
-    def test_different_logprobs_produce_different_scores(self) -> None:
-        """End-to-end: different log-probs must yield different softmax probs.
-
-        Regression test for the 50/50 bug: with the _LOGIT_FLOOR constant,
-        all candidates got log_softmax ≈ 0.0, making softmax always 50/50.
-        Uses causal alignment: prefix_count=2, candidate at position 1.
-        """
-        from dynamic_prompt_core.infrastructure.llm.classifier import (
-            _softmax,
+class TestForcedTokenScoring:
+    async def test_single_token_candidate(self) -> None:
+        adapter, session = _make_adapter([_MockResponse(200, _completion_response(16, -12.17))])
+        result = await adapter.forward_batch(
+            [[1, 2, 3, 16]],
+            [[1, 1, 1, 1]],
+            prefix_token_counts=[3],
+            candidate_token_ids=[[16]],
         )
+        assert len(session.post_calls) == 1
+        call = session.post_calls[0]
+        assert call["url"] == "http://127.0.0.1:8080/v1/completions"
+        payload = call["json"]
+        assert payload["prompt"] == [1, 2, 3]
+        assert payload["logit_bias"] == {"16": 100}
+        assert payload["max_tokens"] == 1
+        assert payload["logprobs"] == 1
+        assert payload["temperature"] == 0
 
-        vocab = 100
-        # Candidate A: strong support (lp = -0.2)
-        # Sequence: [prefix_0, prefix_1, cand_a], LogitScorer reads position 1
-        logits_a = _build_logits_from_logprobs(
-            [None, -0.5, -0.2], [0, 1, 10], vocab_size=vocab
+        item = result.items[0]
+        assert len(item.logits) == 4
+        score = LogitScorer().score(
+            prefix_token_count=3, candidate_token_ids=[16], sequence_logits=item
         )
-        score_a = _log_probability(logits_a[1], 10)
-        # Candidate B: weak support (lp = -2.0)
-        logits_b = _build_logits_from_logprobs(
-            [None, -0.5, -2.0], [0, 1, 20], vocab_size=vocab
-        )
-        score_b = _log_probability(logits_b[1], 20)
+        assert score == pytest.approx(-12.17, abs=1e-9)
 
-        probs = _softmax([score_a, score_b])
-        assert probs[0] > 0.5
-        assert probs[1] < 0.5
-        assert probs[0] != pytest.approx(0.5, abs=1e-6)
-
-
-class TestParseV1Logprobs:
-    def test_valid_response(self) -> None:
-        body = {
-            "choices": [
-                {
-                    "logprobs": {
-                        "token_logprobs": [None, -0.5, -1.2],
-                        "tokens": ["a", "b", "c"],
-                    }
-                }
+    async def test_two_candidates_one_request_each(self) -> None:
+        adapter, session = _make_adapter(
+            [
+                _MockResponse(200, _completion_response(15, -14.62)),
+                _MockResponse(200, _completion_response(16, -12.17)),
             ]
-        }
-        result = _parse_v1_logprobs(body, token_ids=[1, 2, 3])
-        assert len(result) == 3
-        # Position 0 predicts token_ids[1]=2 with logprob -0.5
-        assert result[0][2] == pytest.approx(-0.5)
+        )
+        result = await adapter.forward_batch(
+            [[1, 2, 3, 15], [1, 2, 3, 16]],
+            [[1, 1, 1, 1], [1, 1, 1, 1]],
+            prefix_token_counts=[3, 3],
+            candidate_token_ids=[[15], [16]],
+        )
+        assert len(session.post_calls) == 2
+        scorer = LogitScorer()
+        score0 = scorer.score(3, [15], result.items[0])
+        score1 = scorer.score(3, [16], result.items[1])
+        assert score0 == pytest.approx(-14.62, abs=1e-9)
+        assert score1 == pytest.approx(-12.17, abs=1e-9)
 
-    def test_content_format(self) -> None:
-        body = {
-            "choices": [
-                {
-                    "logprobs": {
-                        "content": [
-                            {"id": 1, "token": "a", "logprob": None},
-                            {"id": 2, "token": "b", "logprob": -0.5},
-                            {"id": 3, "token": "c", "logprob": -1.2},
-                        ]
-                    }
-                }
+    async def test_multi_token_candidate_prompt_grows(self) -> None:
+        adapter, session = _make_adapter(
+            [
+                _MockResponse(200, _completion_response(7, -0.5)),
+                _MockResponse(200, _completion_response(8, -1.5)),
             ]
-        }
-        result = _parse_v1_logprobs(body, token_ids=[1, 2, 3])
-        assert len(result) == 3
-        # Position 0 predicts token_ids[1]=2 with logprob -0.5
-        assert result[0][2] == pytest.approx(-0.5)
-        # Position 1 predicts token_ids[2]=3 with logprob -1.2
-        assert result[1][3] == pytest.approx(-1.2)
+        )
+        result = await adapter.forward_batch(
+            [[1, 2, 3, 7, 8]],
+            [[1, 1, 1, 1, 1]],
+            prefix_token_counts=[3],
+            candidate_token_ids=[[7, 8]],
+        )
+        prompts = [c["json"]["prompt"] for c in session.post_calls]
+        biases = [c["json"]["logit_bias"] for c in session.post_calls]
+        assert prompts == [[1, 2, 3], [1, 2, 3, 7]]
+        assert biases == [{"7": 100}, {"8": 100}]
+        score = LogitScorer().score(3, [7, 8], result.items[0])
+        assert score == pytest.approx((-0.5 + -1.5) / 2, abs=1e-9)
 
-    def test_missing_choices(self) -> None:
-        with pytest.raises(LLMScoringError, match="missing choices"):
-            _parse_v1_logprobs({}, token_ids=[1])
+    async def test_padding_stripped_from_prompt(self) -> None:
+        adapter, session = _make_adapter([_MockResponse(200, _completion_response(16, -1.0))])
+        await adapter.forward_batch(
+            [[1, 2, 3, 16, 0, 0]],
+            [[1, 1, 1, 1, 0, 0]],
+            prefix_token_counts=[3],
+            candidate_token_ids=[[16]],
+        )
+        assert session.post_calls[0]["json"]["prompt"] == [1, 2, 3]
 
-    def test_missing_logprobs(self) -> None:
-        with pytest.raises(LLMScoringError, match="missing logprobs"):
-            _parse_v1_logprobs({"choices": [{}]}, token_ids=[1])
+    async def test_empty_batch(self) -> None:
+        adapter, session = _make_adapter([])
+        result = await adapter.forward_batch(
+            [], [], prefix_token_counts=[], candidate_token_ids=[]
+        )
+        assert result.items == ()
+        assert session.post_calls == []
 
-    def test_missing_token_logprobs(self) -> None:
-        with pytest.raises(LLMScoringError, match="missing token_logprobs or content"):
-            _parse_v1_logprobs(
-                {"choices": [{"logprobs": {}}]}, token_ids=[1]
+
+class TestRequiredKwargs:
+    async def test_missing_kwargs_rejected(self) -> None:
+        adapter, _ = _make_adapter([])
+        with pytest.raises(LLMScoringError, match="requires prefix_token_counts"):
+            await adapter.forward_batch([[1, 2]], [[1, 1]])
+
+    async def test_batch_size_mismatch_rejected(self) -> None:
+        adapter, _ = _make_adapter([])
+        with pytest.raises(LLMScoringError, match="must.*match the batch size"):
+            await adapter.forward_batch(
+                [[1, 2]], [[1, 1]], prefix_token_counts=[1, 1], candidate_token_ids=[[5]]
             )
 
-    def test_token_id_mismatch_raises(self) -> None:
-        """API returning different token IDs than the originals must raise."""
-        body = {
-            "choices": [
-                {
-                    "logprobs": {
-                        "content": [
-                            {"id": 10, "token": "a", "logprob": None},
-                            {"id": 20, "token": "b", "logprob": -0.5},
-                            {"id": 30, "token": "c", "logprob": -1.2},
-                        ]
-                    }
-                }
-            ]
-        }
-        with pytest.raises(LLMScoringError, match="do not match"):
-            _parse_v1_logprobs(body, token_ids=[1, 2, 3])
 
-    def test_token_id_match_succeeds(self) -> None:
-        """API returning the same token IDs as the originals succeeds."""
-        body = {
-            "choices": [
-                {
-                    "logprobs": {
-                        "content": [
-                            {"id": 1, "token": "a", "logprob": None},
-                            {"id": 2, "token": "b", "logprob": -0.5},
-                            {"id": 3, "token": "c", "logprob": -1.2},
-                        ]
-                    }
-                }
-            ]
-        }
-        result = _parse_v1_logprobs(body, token_ids=[1, 2, 3])
-        assert len(result) == 3
-        assert result[0][2] == pytest.approx(-0.5)
+class TestResponseValidation:
+    async def test_identity_mismatch_rejected(self) -> None:
+        adapter, _ = _make_adapter([_MockResponse(200, _completion_response(99, -1.0))])
+        with pytest.raises(LLMScoringError, match="generated token id 99"):
+            await adapter.forward_batch(
+                [[1, 2, 3, 16]],
+                [[1, 1, 1, 1]],
+                prefix_token_counts=[3],
+                candidate_token_ids=[[16]],
+            )
 
-
-class TestLlamaServerCausalLMAdapter:
-    def _make_adapter_with_mock(
-        self, responses: list[_MockResponse]
-    ) -> tuple[LlamaServerCausalLMAdapter, _MockSession]:
-        adapter = LlamaServerCausalLMAdapter(
-            endpoint="http://127.0.0.1:8080",
-            timeout=5,
+    async def test_nan_logprob_rejected(self) -> None:
+        adapter, _ = _make_adapter(
+            [_MockResponse(200, _completion_response(16, float("nan")))]
         )
-        mock_session = _MockSession(responses)
-        adapter._session = mock_session
-        return adapter, mock_session
+        with pytest.raises(LLMScoringError, match="NaN"):
+            await adapter.forward_batch(
+                [[1, 2, 3, 16]],
+                [[1, 1, 1, 1]],
+                prefix_token_counts=[3],
+                candidate_token_ids=[[16]],
+            )
 
-    def _make_native_response(
-        self, token_logprobs: list[float | None], token_ids: list[int] | None = None,
-    ) -> _MockResponse:
-        ids = token_ids or list(range(len(token_logprobs)))
-        return _MockResponse(
-            200,
-            {
-                "content": "",
-                "prompt_tokens": ids,
-                "prompt_logprobs": token_logprobs,
-            },
+    async def test_missing_choices_rejected(self) -> None:
+        adapter, _ = _make_adapter([_MockResponse(200, {"unexpected": True})])
+        with pytest.raises(LLMScoringError, match="missing choices"):
+            await adapter.forward_batch(
+                [[1, 2, 3, 16]],
+                [[1, 1, 1, 1]],
+                prefix_token_counts=[3],
+                candidate_token_ids=[[16]],
+            )
+
+    async def test_missing_logprobs_rejected(self) -> None:
+        adapter, _ = _make_adapter(
+            [_MockResponse(200, {"choices": [{"index": 0}]})]
         )
+        with pytest.raises(LLMScoringError, match="missing logprobs"):
+            await adapter.forward_batch(
+                [[1, 2, 3, 16]],
+                [[1, 1, 1, 1]],
+                prefix_token_counts=[3],
+                candidate_token_ids=[[16]],
+            )
 
-    async def test_forward_batch_single_item(self) -> None:
-        adapter, mock = self._make_adapter_with_mock(
-            [self._make_native_response([None, -0.5], [1, 2])]
+    async def test_missing_content_rejected(self) -> None:
+        adapter, _ = _make_adapter(
+            [_MockResponse(200, {"choices": [{"logprobs": {}}]})]
         )
-        result = await adapter.forward_batch([[1, 2]], [[1, 1]])
-        assert len(result.items) == 1
-        assert len(result.items[0].logits) == 2
-        assert mock.post_calls[0]["json"]["n_predict"] == 0
-        assert mock.post_calls[0]["json"]["prompt_logprobs"] == 1
+        with pytest.raises(LLMScoringError, match="missing logprobs content"):
+            await adapter.forward_batch(
+                [[1, 2, 3, 16]],
+                [[1, 1, 1, 1]],
+                prefix_token_counts=[3],
+                candidate_token_ids=[[16]],
+            )
 
-    async def test_forward_batch_multiple_items(self) -> None:
-        adapter, _ = self._make_adapter_with_mock(
-            [
-                self._make_native_response([None], [1]),
-                self._make_native_response([None, -0.7], [2, 3]),
-            ]
-        )
-        result = await adapter.forward_batch([[1], [2, 3]], [[1], [1, 1]])
-        assert len(result.items) == 2
-
-    async def test_forward_batch_strips_padding(self) -> None:
-        adapter, mock = self._make_adapter_with_mock(
-            [self._make_native_response([None, -0.5], [1, 2])]
-        )
-        await adapter.forward_batch([[1, 2, 0, 0]], [[1, 1, 0, 0]])
-        sent_prompt = mock.post_calls[0]["json"]["prompt"]
-        assert sent_prompt == [1, 2]
-
-    async def test_forward_batch_empty(self) -> None:
-        adapter = LlamaServerCausalLMAdapter(endpoint="http://127.0.0.1:8080")
-        result = await adapter.forward_batch([], [])
-        assert result.items == ()
-
-    async def test_non_200_raises(self) -> None:
-        adapter, _ = self._make_adapter_with_mock(
-            [_MockResponse(500, "internal server error")]
-        )
+    async def test_http_error_surfaces_with_status(self) -> None:
+        adapter, _ = _make_adapter([_MockResponse(500, {"error": "boom"})])
         with pytest.raises(LLMScoringError, match="HTTP 500"):
-            await adapter.forward_batch([[1]], [[1]])
+            await adapter.forward_batch(
+                [[1, 2, 3, 16]],
+                [[1, 1, 1, 1]],
+                prefix_token_counts=[3],
+                candidate_token_ids=[[16]],
+            )
 
-    async def test_connection_error_raises(self) -> None:
-        adapter = LlamaServerCausalLMAdapter(endpoint="http://127.0.0.1:9999")
 
-        class FailingSession:
-            closed = False
-
-            def post(self, url: str, json: dict | None = None) -> Any:
-                raise ConnectionRefusedError("connection refused")
-
-            async def close(self) -> None:
-                pass
-
-        adapter._session = FailingSession()
-        with pytest.raises(LLMScoringError, match="request failed"):
-            await adapter.forward_batch([[1]], [[1]])
-
-    async def test_describe_returns_metadata(self) -> None:
-        adapter = LlamaServerCausalLMAdapter(
-            endpoint="http://10.0.0.1:7070",
-            timeout=45,
-            served_model_name="qwen2.5-3b",
+class TestRetries:
+    async def test_transient_disconnect_retried(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        adapter, session = _make_adapter(
+            [
+                aiohttp.ServerDisconnectedError("boom"),
+                _MockResponse(200, _completion_response(16, -2.0)),
+            ]
         )
+        monkeypatch.setattr(adapter, "_get_session", lambda: session)
+        result = await adapter.forward_batch(
+            [[1, 2, 3, 16]],
+            [[1, 1, 1, 1]],
+            prefix_token_counts=[3],
+            candidate_token_ids=[[16]],
+        )
+        assert len(session.post_calls) == 2
+        score = LogitScorer().score(3, [16], result.items[0])
+        assert score == pytest.approx(-2.0, abs=1e-9)
+
+    async def test_retries_exhausted_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        adapter, session = _make_adapter(
+            [aiohttp.ServerDisconnectedError("boom")] * 3
+        )
+        monkeypatch.setattr(adapter, "_get_session", lambda: session)
+        with pytest.raises(LLMScoringError, match="after 3 retries"):
+            await adapter.forward_batch(
+                [[1, 2, 3, 16]],
+                [[1, 1, 1, 1]],
+                prefix_token_counts=[3],
+                candidate_token_ids=[[16]],
+            )
+
+
+class TestLifecycle:
+    async def test_describe_metadata(self) -> None:
+        adapter, _ = _make_adapter([])
         meta = adapter.describe()
         assert meta["backend"] == "llama_server"
-        assert meta["endpoint"] == "http://10.0.0.1:7070"
-        assert meta["served_model_name"] == "qwen2.5-3b"
-        assert meta["timeout"] == 45
+        assert meta["endpoint"] == "http://127.0.0.1:8080"
+        assert meta["forcing_bias"] == 100
+        assert meta["timeout"] == 5
+        assert set(meta) == {
+            "backend",
+            "endpoint",
+            "served_model_name",
+            "forcing_bias",
+            "timeout",
+        }
 
     async def test_aclose_closes_session(self) -> None:
-        adapter, mock = self._make_adapter_with_mock([])
+        adapter, session = _make_adapter([])
         await adapter.aclose()
-        assert mock.closed is True
+        assert session.closed is True

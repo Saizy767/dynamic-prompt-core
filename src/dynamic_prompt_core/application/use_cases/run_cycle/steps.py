@@ -11,6 +11,7 @@ import logging
 import os
 from typing import Any, cast
 
+from dynamic_prompt_core.application.ports.outbound.normalizer import Normalizer
 from dynamic_prompt_core.application.services.metrics import (
     MetricsConfig,
     compute_metrics,
@@ -21,6 +22,7 @@ from dynamic_prompt_core.application.services.metrics import (
 from dynamic_prompt_core.application.use_cases.analyze_theses.thesis_analyzer import (
     ThesisAnalyzerConfig,
     analyze,
+    carry_over_in_prompt_flags,
     write_dump,
 )
 from dynamic_prompt_core.application.use_cases.analyze_theses.thesis_analyzer import (
@@ -32,12 +34,14 @@ from dynamic_prompt_core.application.use_cases.compare_versions.comparator impor
 )
 from dynamic_prompt_core.application.use_cases.compose_prompt.composer import (
     PromptComposerConfig,
+    PromptComposerError,
     assemble_prompt,
     compose,
     finalized_version,
     intermediate_version,
     load_base_layers,
     load_centroids,
+    validate_limits,
     write_prompt_version,
 )
 from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
@@ -46,6 +50,7 @@ from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
 )
 from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 from dynamic_prompt_core.application.use_cases.run_cycle.report import (
+    CycleOrchestratorError,
     log_event,
     write_report,
 )
@@ -124,17 +129,31 @@ def compute_dev_metrics(results_path: str, config_path: str) -> dict[str, Any]:
 def update_thesis_collection(
     results_path: str,
     config_path: str,
-    refined_path: str | None = None,
+    refined_rows: list[dict[str, Any]] | None = None,
+    previous_bank_path: str | None = None,
 ) -> tuple[str, str]:
     """Run the thesis analyzer on the active results.
 
-    Returns ``(thesis_bank_path, clusters_path)``.  When ``refined_path`` is
-    provided, the refined theses artifact is used instead of the raw results.
+    Returns ``(thesis_bank_path, clusters_path)``.  When ``refined_rows`` is
+    provided (teacher refinement), those rows are analyzed instead of the raw
+    results; artifact names still derive from ``results_path``.  When
+    ``previous_bank_path`` is given, ``in_prompt`` flags are carried over from
+    the previous cycle's bank so the selector can exclude clusters whose
+    rules are already in the active prompt.
     """
     ta_config = ThesisAnalyzerConfig.from_config(config_path)
-    source = refined_path if refined_path is not None else results_path
-    rows = load_analyzer_results(source)
-    bank, name_parts = analyze(rows, ta_config, source)
+    if refined_rows is not None:
+        rows = refined_rows
+    else:
+        rows = load_analyzer_results(results_path)
+    bank, name_parts = analyze(rows, ta_config, results_path)
+    if previous_bank_path and os.path.exists(previous_bank_path):
+        carried = carry_over_in_prompt_flags(bank, previous_bank_path)
+        log.info(
+            "carried over %d in_prompt theses from previous bank %s",
+            carried,
+            previous_bank_path,
+        )
     run_id = name_parts.get("run_id", "unknown")
     prompt_version = name_parts.get("prompt_version", "unknown")
     thesis_bank_path = write_dump(bank, run_id, prompt_version, ta_config, ta_config.output_dir)
@@ -290,20 +309,57 @@ async def run_holdout(
 # --------------------------------------------------------------------------- #
 #  Optional teacher refinement (step between 1 and 3)
 # --------------------------------------------------------------------------- #
+def _merge_refined_rows(
+    results_path: str,
+    refined_path: str,
+    normalizer: Normalizer,
+    language: str,
+) -> list[dict[str, Any]]:
+    """Merge refined theses back into the full result rows.
+
+    The refined artifact carries only ``{id, theses_raw_tiny,
+    theses_refined, ...}``; the analyzer requires the full results schema
+    (true_label, statuses, theses_norm).  Each row keeps every original
+    field; ``theses_raw``/``theses_norm`` are replaced by the refined theses,
+    re-normalized with the same normalizer the runner used.
+    """
+    from dynamic_prompt_core.application.use_cases.refine_theses.refiner import (
+        load_refined,
+    )
+
+    original_rows = load_analyzer_results(results_path)
+    refined_by_id = {rec["id"]: rec for rec in load_refined(refined_path)}
+    merged: list[dict[str, Any]] = []
+    for row in original_rows:
+        rec = refined_by_id.get(row["id"])
+        if rec is None:
+            merged.append(row)
+            continue
+        theses = list(rec["theses_refined"])
+        merged.append(
+            {
+                **row,
+                "theses_raw": theses,
+                "theses_norm": normalizer.normalize_theses(theses, language),
+            }
+        )
+    return merged
+
+
 async def refine_theses_step(
     results_path: str,
     run_id: str,
     prompt_version: str,
     deps: RunCycleDeps,
     config_path: str,
-) -> str:
+) -> list[dict[str, Any]] | None:
     """Optionally refine theses via the teacher model.
 
-    Returns the refined artifact path when refinement is enabled, or the
-    original ``results_path`` when ``deps.teacher_llm_client is None``.
+    Returns the result rows with refined theses merged in when refinement
+    is enabled, or ``None`` when ``deps.teacher_llm_client is None``.
     """
     if deps.teacher_llm_client is None:
-        return results_path
+        return None
 
     from dynamic_prompt_core.application.use_cases.refine_theses.refine_theses_deps import (
         RefineThesesDeps,
@@ -326,7 +382,10 @@ async def refine_theses_step(
         output_dir=os.path.join(os.path.dirname(results_path) or "data/results", ""),
     )
     result = await refine_theses(refine_deps, inp)
-    return result.artifact_path
+    language = RunnerConfig.from_config(config_path).language
+    return _merge_refined_rows(
+        results_path, result.artifact_path, deps.normalizer, language
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -370,9 +429,9 @@ async def run_cycle_step(
     )
 
     # Optional teacher refinement (between step 1 and step 3)
-    refined_path: str | None = None
+    refined_rows: list[dict[str, Any]] | None = None
     if config.use_teacher_refinement:
-        refined_path = await refine_theses_step(
+        refined_rows = await refine_theses_step(
             active_dev_path,
             state.run_id,
             active_version_at_start,
@@ -380,11 +439,14 @@ async def run_cycle_step(
             config_path,
         )
 
-    # Step 3: Update thesis collection
+    # Step 3: Update thesis collection (carry in_prompt over from the
+    # previous cycle's bank so accepted clusters are not re-selected)
+    previous_bank_path = state.thesis_bank_path or None
     thesis_bank_path, clusters_path = update_thesis_collection(
         active_dev_path,
         config_path,
-        refined_path=refined_path,
+        refined_rows=refined_rows,
+        previous_bank_path=previous_bank_path,
     )
     state.thesis_bank_path = thesis_bank_path
     state.clusters_path = clusters_path
@@ -394,31 +456,48 @@ async def run_cycle_step(
     state.candidate_queue = list(candidate_queue)
     state.last_cycle_new_candidates = len(candidate_queue)
 
-    # Step 5: Run active on holdout → cached baseline for the accumulation loop
+    # Step 5: Run active on holdout → cached baseline for the accumulation
+    # loop.  Every accept decision compares against this baseline; without it
+    # the round can only roll back, so a transient failure is retried once
+    # and a persistent failure aborts loudly instead of silently dooming the
+    # round into a no_improvement stop.
     metrics_holdout_active: dict[str, Any] = {}
-    try:
-        metrics_holdout_active = await run_holdout(
-            state.active_version,
-            config,
-            config_path,
-            deps,
-            state.run_id,
-            round_number=cycle_number,
+    last_holdout_exc: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            metrics_holdout_active = await run_holdout(
+                state.active_version,
+                config,
+                config_path,
+                deps,
+                state.run_id,
+                round_number=cycle_number,
+            )
+            break
+        except Exception as exc:
+            last_holdout_exc = exc
+            log.warning(
+                "active holdout evaluation failed (attempt %d/2): %s",
+                attempt,
+                exc,
+            )
+    if not metrics_holdout_active:
+        raise CycleOrchestratorError(
+            "active holdout baseline unavailable after 2 attempts "
+            f"(last error: {last_holdout_exc}); check the inference server "
+            "and resume from the last state dump"
         )
-    except Exception as exc:
-        log.warning("active holdout evaluation failed: %s", exc)
 
-    if metrics_holdout_active:
-        _hold_summary = _extract_metric_summary(metrics_holdout_active)
-        log.info(
-            "cycle %d active holdout metrics: version=%s accuracy=%.4f "
-            "macro_f1=%.4f minority_f1=%.4f",
-            cycle_number,
-            active_version_at_start,
-            _hold_summary["accuracy"],
-            _hold_summary["macro_f1"],
-            _hold_summary["minority_f1"],
-        )
+    _hold_summary = _extract_metric_summary(metrics_holdout_active)
+    log.info(
+        "cycle %d active holdout metrics: version=%s accuracy=%.4f "
+        "macro_f1=%.4f minority_f1=%.4f",
+        cycle_number,
+        active_version_at_start,
+        _hold_summary["accuracy"],
+        _hold_summary["macro_f1"],
+        _hold_summary["minority_f1"],
+    )
 
     # Steps 6–7: Greedy incremental rule accumulation (holdout only)
     best_prompt = state.active_version
@@ -430,6 +509,9 @@ async def run_cycle_step(
     new_version = ""
 
     pc_config = PromptComposerConfig.from_config(config_path)
+    # AsyncTask exposes its tokenizer only via a private attr; the CLI does
+    # the same reach. Falls back to word count when absent (tests, mocks).
+    tokenizer = getattr(deps.llm_client, "_tokenizer", None)
 
     while state.candidate_queue:
         current_rule_count = len(best_prompt.layers.rules) if best_prompt.layers else 0
@@ -467,6 +549,16 @@ async def run_cycle_step(
                 new_prompt.version,
                 len(new_rules),
                 len(old_rules),
+            )
+            continue
+
+        try:
+            validate_limits(new_prompt, pc_config, tokenizer)
+        except PromptComposerError as exc:
+            log.warning(
+                "candidate cluster_id=%s rejected by prompt limits: %s; skipping evaluation",
+                candidate.get("cluster_id"),
+                exc,
             )
             continue
 

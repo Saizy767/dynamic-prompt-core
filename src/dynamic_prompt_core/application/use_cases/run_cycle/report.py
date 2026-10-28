@@ -7,6 +7,7 @@ logging and never calls ``logging.basicConfig``.
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
@@ -17,8 +18,11 @@ from dynamic_prompt_core.application.ports.outbound.run_repository import (
     RunRepository,
 )
 from dynamic_prompt_core.application.use_cases.run_cycle.state import CycleState
+from dynamic_prompt_core.infrastructure.storage.run_repository import _atomic_write
 
 log = logging.getLogger(__name__)
+
+_write_counter = itertools.count()
 
 VALID_STOP_REASONS = frozenset(
     {
@@ -60,7 +64,6 @@ def write_report(
 ) -> str:
     """Serialize a per-cycle report to ``report_cycle/report_{run_id}_cycle{N}_{ts}.json``."""
     output_dir = os.path.join(output_dir, "report_cycle")
-    os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"report_{run_id}_cycle{round_number}_{timestamp}.json"
     path = os.path.join(output_dir, name)
@@ -80,8 +83,8 @@ def write_report(
         "run_id": run_id,
         "timestamp": timestamp,
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+    payload = json.dumps(report, ensure_ascii=False, indent=2)
+    _atomic_write(path, payload, _write_counter)
     return path
 
 
@@ -109,7 +112,6 @@ def write_summary(
             f"invalid stop_reason {stop_reason!r}; expected one of {sorted(VALID_STOP_REASONS)}"
         )
     output_dir = os.path.join(output_dir, "report_cycle")
-    os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"summary_{run_id}_{timestamp}.json"
     path = os.path.join(output_dir, name)
@@ -125,8 +127,8 @@ def write_summary(
         "run_id": run_id,
         "timestamp": timestamp,
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+    payload = json.dumps(summary, ensure_ascii=False, indent=2)
+    _atomic_write(path, payload, _write_counter)
     return path
 
 

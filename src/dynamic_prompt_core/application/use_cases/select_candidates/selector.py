@@ -340,7 +340,6 @@ def main() -> None:
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     args = parser.parse_args()
 
-    pass  # logging configured by composition root
     log = logging.getLogger(__name__)
 
     config = RuleCandidateSelectorConfig.from_config(args.config)

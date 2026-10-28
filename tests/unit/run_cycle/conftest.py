@@ -15,7 +15,6 @@ from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle_deps import (
 from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.classification import Classification
 from dynamic_prompt_core.domain.models.classification_rules import ClassificationRules
-from dynamic_prompt_core.domain.models.dataset import Dataset, Record
 from dynamic_prompt_core.domain.models.judgment import Judgment
 from dynamic_prompt_core.infrastructure.llm import CallResult, ResponseStatus
 from dynamic_prompt_core.infrastructure.llm.extractor import ExtractionResult
@@ -28,11 +27,6 @@ class MockLLMClient:
         self, text, model, *, system_prompt="", max_tokens=512, truncate_tokens=None
     ):
         return {"theses": ["thesis one", "thesis two"]}
-
-    async def extract_theses_many(
-        self, texts, model, *, system_prompt="", max_tokens=512, truncate_tokens=None
-    ):
-        return [await self.extract_theses(t, model, system_prompt=system_prompt) for t in texts]
 
 
 class MockPromptRepository:
@@ -89,29 +83,6 @@ class MockRunRepository:
                 if line:
                     records.append(json.loads(line))
         return records
-
-
-class MockDatasetRepository:
-    """Mock dataset repository port."""
-
-    def load_dataset(self, path):
-        return [Record(id=1, text="test", label=1)]
-
-    def load_artifact(self, path):
-        return Dataset(dev=[Record(id=1, text="test", label=1)])
-
-    def write_artifact(self, dataset, output_dir="data", fmt="jsonl", notes=""):
-        return "mock_path"
-
-
-class MockEmbeddingClient:
-    """Mock embedding client port."""
-
-    def embed(self, texts):
-        return [[0.1, 0.2, 0.3] for _ in texts]
-
-    def embed_one(self, text):
-        return [0.1, 0.2, 0.3]
 
 
 class MockNormalizer:
@@ -205,16 +176,6 @@ def mock_run_repository():
 
 
 @pytest.fixture
-def mock_dataset_repository():
-    return MockDatasetRepository()
-
-
-@pytest.fixture
-def mock_embedding_client():
-    return MockEmbeddingClient()
-
-
-@pytest.fixture
 def mock_normalizer():
     return MockNormalizer()
 
@@ -231,8 +192,6 @@ def build_mock_deps():
             llm_client=MockLLMClient(),
             prompt_repository=MockPromptRepository(),
             run_repository=MockRunRepository(),
-            dataset_repository=MockDatasetRepository(),
-            embedding_client=MockEmbeddingClient(),
             normalizer=MockNormalizer(),
             classifier=FakeClassifier(),
             extractor=FakeExtractor(),

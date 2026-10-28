@@ -152,24 +152,6 @@ class TestNonFiniteAndEmpty:
             scorer.score(1, [], seq)
 
 
-class TestFallbackBehavior:
-    def test_selective_disabled_uses_full_read(self) -> None:
-        from dynamic_prompt_core.infrastructure.llm.scoring.llama_cpp_adapter import (
-            LlamaCppBatchedCausalLMAdapter,
-        )
-
-        from ._gguf_mocks import FakeLlama
-
-        adapter = LlamaCppBatchedCausalLMAdapter(
-            model_path="unused.gguf", n_ctx=64, _llama=FakeLlama(n_vocab=8)
-        )
-        assert adapter.selective_logits_supported is False
-        result = adapter.forward_batch([[1, 2, 3, 4]], [[1, 1, 1, 1]])
-        assert len(result.items[0].logits) == 4
-        score = scorer.score(2, [0, 1], result.items[0])
-        assert isinstance(score, float)
-
-
 class TestSharedAndNonSharedPrefix:
     def test_shared_prefix_same_score(self) -> None:
         prefix_logits = [_logits(vocab=4, peak=0, strength=1.0) for _ in range(2)]

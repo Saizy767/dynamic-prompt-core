@@ -67,7 +67,11 @@ def test_load_state_preserves_active_version(tmp_path, mock_run_repository):
 
 
 def test_update_in_prompt_flags_sets_correct_values(tmp_path):
-    """update_in_prompt_flags sets in_prompt=true for accepted clusters."""
+    """update_in_prompt_flags flags accepted clusters and keeps earlier flags.
+
+    A thesis already in the prompt (carried over from a previous cycle's
+    bank) must stay flagged: its rule is still in the active prompt.
+    """
     bank = {
         "theses": {
             "t1": {"cluster_id": 1, "in_prompt": False, "text_raw": "t1"},
@@ -85,7 +89,7 @@ def test_update_in_prompt_flags_sets_correct_values(tmp_path):
     with open(bank_path) as f:
         updated = json.load(f)
     assert updated["theses"]["t1"]["in_prompt"] is True
-    assert updated["theses"]["t2"]["in_prompt"] is False
+    assert updated["theses"]["t2"]["in_prompt"] is True
     assert updated["theses"]["t3"]["in_prompt"] is True
 
 

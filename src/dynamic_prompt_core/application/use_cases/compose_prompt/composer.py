@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -40,8 +41,11 @@ from dynamic_prompt_core.domain.prompts import (
     PromptLayer,
     render,
 )
+from dynamic_prompt_core.infrastructure.storage.run_repository import _atomic_write
 
 log = logging.getLogger(__name__)
+
+_write_counter = itertools.count()
 
 DEFAULT_CONFIG_PATH = "config.toml"
 DEFAULT_OUTPUT_DIR = "data/results"
@@ -460,8 +464,6 @@ def validate_limits(
         raise PromptComposerError("prompt has no layers")
 
     rule_count = len(layers.rules)
-    if rule_count < 3:
-        raise PromptComposerError(f"too few rules: {rule_count} < 3")
     if rule_count > config.max_rules:
         raise PromptComposerError(f"too many rules: {rule_count} > {config.max_rules}")
 
@@ -612,7 +614,6 @@ def write_prompt_version(
     Filename: prompt/prompt_v{version}_{run_id}_{timestamp}.json
     """
     output_dir = os.path.join(output_dir, "prompt")
-    os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     version = prompt_artifact.version
     name = f"prompt_v{version}_{run_id}_{timestamp}.json"
@@ -642,8 +643,8 @@ def write_prompt_version(
         },
     }
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(dump, f, ensure_ascii=False, indent=2)
+    payload = json.dumps(dump, ensure_ascii=False, indent=2)
+    _atomic_write(path, payload, _write_counter)
     return path
 
 
@@ -728,7 +729,6 @@ def main() -> None:
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     args = parser.parse_args()
 
-    pass  # logging configured by composition root
 
     from dynamic_prompt_core.domain.prompts import CLASSIFICATION_PROMPT_V0
 

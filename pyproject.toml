@@ -12,7 +12,6 @@ dependencies = [
     "pydantic>=2.0",
     "transformers>=4.40",
     "numpy>=1.26",
-    "tqdm>=4.66",
     "scikit-learn>=1.4",
     "sentence-transformers>=2.7",
     "pymorphy3>=2.0",
@@ -25,11 +24,9 @@ dev = [
     "import-linter>=2.0",
     "mypy>=1.10",
     "ruff>=0.6",
+    "tqdm>=4.66",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-]
-gguf = [
-    "llama-cpp-python>=0.3.0,<0.4",
 ]
 
 [tool.setuptools.packages.find]
@@ -144,10 +141,6 @@ ignore_missing_imports = true
 module = "pyarrow.*"
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = "llama_cpp.*"
-ignore_missing_imports = true
-
 # --------------------------------------------------------------------------- #
 #  ruff — linting and formatting
 # --------------------------------------------------------------------------- #
@@ -170,6 +163,3 @@ known-first-party = ["dynamic_prompt_core"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
-markers = [
-    "gguf: requires the optional llama-cpp-python runtime and a GGUF test fixture",
-]

@@ -169,7 +169,7 @@ class LlamaServerBatchTokenizerAdapter:
                 *(self._tokenize(p) for p in unique_prefixes)
             )
             prefix_ids_by_prefix = dict(
-                zip(unique_prefixes, prefix_token_cache)
+                zip(unique_prefixes, prefix_token_cache, strict=True)
             )
 
             async def _encode_pair(

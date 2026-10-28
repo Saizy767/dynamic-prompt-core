@@ -89,3 +89,22 @@ class TestResumeIdentity:
         runner2 = _make_runner(changed, tmp_path)
         with pytest.raises(ValueError, match="identity mismatch"):
             runner2._verify_resume_identity()
+
+    def test_changed_dataset_fingerprint_raises(self, tmp_path: Path) -> None:
+        classifier = _ClassifierWithDescribe(_BACKEND_META)
+        runner = _make_runner(classifier, tmp_path)
+        runner._write_manifest(dataset_fingerprint="aaa")
+
+        runner2 = _make_runner(classifier, tmp_path)
+        with pytest.raises(ValueError, match="dataset_fingerprint"):
+            runner2._verify_resume_identity(dataset_fingerprint="bbb")
+
+    def test_dataset_fingerprint_hashes_file_bytes(self, tmp_path: Path) -> None:
+        import hashlib
+
+        dataset = tmp_path / "dataset.jsonl"
+        dataset.write_bytes(b"hello")
+        classifier = _ClassifierWithDescribe(_BACKEND_META)
+        runner = _make_runner(classifier, tmp_path)
+        runner._dataset_artifact = str(dataset)
+        assert runner._dataset_fingerprint() == hashlib.sha256(b"hello").hexdigest()

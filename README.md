@@ -44,13 +44,13 @@ Classifier.classify(text, rules) → Classification
 src/dynamic_prompt_core/
   domain/            — модели без сторонних зависимостей (Candidate, Judgment, Classification, Dataset, Record)
   application/       — use cases и порты
-    ports/           — интерфейсы (inbound/outbound: CandidateScorer, LLMClient, PromptRepository, ...)
-    use_cases/       — run_cycle, run_baseline, classify_input, analyze_theses, compose_prompt,
+    ports/           — интерфейсы (inbound/outbound: Classifier, LLMClient, PromptRepository, ...)
+    use_cases/       — run_cycle, run_baseline, analyze_theses, compose_prompt,
                        select_candidates, compare_versions, refine_theses, observe_cycle,
                        evaluate_stop_criteria
-    services/        — ClassificationPolicy, metrics, clustering (чистая логика)
+    services/        — metrics, clustering (чистая логика)
     schemas/         — DTO и схемы обмена между use cases
-  infrastructure/    — конкретные реализации портов (LLMLogitCandidateScorer, AsyncTask, PromptStore)
+  infrastructure/    — конкретные реализации портов (LLMLogitClassifier, AsyncTask, PromptStore)
   interfaces/        — CLI и сервер (composition root)
 ```
 
@@ -64,14 +64,14 @@ src/dynamic_prompt_core/
 вывод. Инфраструктура оценивает кандидатов через logit-скоринг:
 
 ```
-ScoringPromptBuilder → BatchTokenizerAdapter → BatchedCausalLanguageModel
+ClassifierPromptBuilder → BatchTokenizerAdapter → BatchedCausalLanguageModel
     → LogitScorer → Judgment[]
 ```
 
-Приложение передаёт набор кандидатов (`Candidate`) в `CandidateScorer.score()`,
-получает `Judgment[]` и передаёт их в `ClassificationPolicy.classify()`, которая
-возвращает `Classification`. `ArgmaxClassificationPolicy` выбирает кандидата с
-наивысшей оценкой; ties разрешаются по порядку входа.
+Приложение передаёт текст и `ClassificationRules` в `Classifier.classify()`,
+который возвращает `Classification` (выбранный кандидат + полный набор
+`Judgment`). Кандидат с наивысшей оценкой побеждает; ties разрешаются по
+порядку входа.
 
 #### Backend selection
 
@@ -80,7 +80,7 @@ ScoringPromptBuilder → BatchTokenizerAdapter → BatchedCausalLanguageModel
 
 - **`huggingface`** — загрузка модели через `transformers`.
 - **`gguf`** — загрузка локального GGUF-файла через `llama-cpp-python` (опциональная
-  зависимость). Backend использует тот же `LogitScorer` и `ScoringPromptBuilder`,
+  зависимость). Backend использует тот же `LogitScorer` и `ClassifierPromptBuilder`,
   что и Hugging Face; меняются только adapter'ы модели и токенизатора.
 - **`llama_server`** — HTTP-доступ к `llama-server` (Metal GPU acceleration), без
   опциональных зависимостей — используется только core-пакет `aiohttp`. Подключается
@@ -110,18 +110,22 @@ model_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
 5. **Композиция новой версии** через `stage3-prompt-composer`.
 6. **Прогон новой версии** на dev.
 7. **Сравнение и решение** (accept/rollback) через `stage2-version-comparator`.
-8. **Обновление активной версии** или переход к следующему кандидату.
+8. **Обновление активной версии**; при rollback накопление останавливается,
+   оставшиеся кандидаты сохраняются в очереди.
 9. **Запись per-cycle report** и state dump.
 
-При rollback цикл пробует следующего кандидата из очереди. При accept —
-активирует новую версию в prompt store. Цикл останавливается по одной из
-причин: `max_cycles_reached`, `no_improvement`, `plateau_detected`,
+Накопление правил жадное: при accept цикл сразу пробует следующего кандидата
+из очереди; первый rollback останавливает накопление (оставшиеся кандидаты
+сохраняются в очереди до следующего круга). Финализированная версия
+активируется в prompt store. Если за круг не принят ни один кандидат, цикл
+останавливается с причиной `no_improvement`. Полный список причин остановки:
+`max_cycles_reached`, `no_improvement`, `plateau_detected`,
 `unrecoverable_error`.
 
 ### Запуск
 
 ```bash
-# Запуск цикла (3 круга по умолчанию для CLI, max_cycles из config — иначе)
+# Запуск цикла (max_cycles из config; --cycles переопределяет)
 python -m dynamic_prompt_core.interfaces.cli.main cycle
 
 # Указать количество кругов и split
@@ -148,13 +152,8 @@ python -m dynamic_prompt_core.interfaces.cli.observer --run-id latest
 | `dev_split` | `dev` | Split для активного прогона и решения accept/rollback |
 | `holdout_split` | `holdout` | Split для holdout-прогона (только логируется) |
 | `prompt_start` | `0` | Стартовая версия: `0` (baseline) или `best` (новейшая из store) |
-| `prompt_store_path` | `""` | Путь к активной версии промпта (пусто — baseline v0) |
-| `thesis_bank_path` | `""` | Seed thesis-bank для цикла (пусто — строится в первом круге) |
-| `candidate_queue_path` | `""` | Seed очереди кандидатов (пусто — заполняется selector'ом) |
 | `use_teacher_refinement` | false | Включить teacher refinement между baseline и thesis-analysis |
-| `stop_on_first_error` | false | Остановка при первой ошибке шага |
 | `dump_state_after_each_cycle` | true | State dump после каждого круга |
-| `report_format` | `json` | Формат отчётов (`json`; `markdown` — planned) |
 | `output_dir` | `data/results` | Каталог артефактов цикла |
 
 Решение accept/rollback настраивается отдельно в секции `[version_comparator]`:
@@ -198,7 +197,7 @@ duration = [50, 100, 200]
 
 - **run_baseline** — прогон датасета через модель: thesis extraction через
   `extract_theses_detailed` + классификация через candidate scoring
-  (`CandidateScorer` → `ClassificationPolicy`), с чекпоинтами и resume.
+  (`Classifier`), с чекпоинтами и resume.
 - **metrics** — accuracy, precision/recall/F1, confusion matrix, minority-class
   F1, распределение предсказаний, bias detection.
 - **thesis-analyzer** — сбор тезисов из reasoning, нормализация, эмбеддинги,

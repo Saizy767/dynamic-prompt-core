@@ -4,14 +4,16 @@ Wraps the existing extraction logic (AsyncTask.extract_theses_detailed,
 repair, status mapping, normalization) with a dedicated system prompt
 loaded from a resource file.  Does not receive classification results.
 """
+
 from __future__ import annotations
 
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import TypeVar, cast
 
 import aiohttp
+from pydantic import BaseModel
 
 from dynamic_prompt_core.application.schemas import ThesisExtraction
 from dynamic_prompt_core.infrastructure.llm import (
@@ -31,8 +33,10 @@ _STATUS_REPAIRED = "repaired"
 _STATUS_FAILED = "failed"
 _STATUS_SKIPPED = "skipped"
 
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
-def _try_repair(raw_content: str | None, model_cls: type) -> Any | None:
+
+def _try_repair(raw_content: str | None, model_cls: type[_ModelT]) -> _ModelT | None:
     if not raw_content:
         return None
     stripped = raw_content.strip()
@@ -40,15 +44,17 @@ def _try_repair(raw_content: str | None, model_cls: type) -> Any | None:
     if m:
         candidate = m.group(1).strip()
         try:
-            return model_cls.model_validate_json(candidate)  # type: ignore[attr-defined]
+            return model_cls.model_validate_json(candidate)
         except Exception:
             pass
     return None
 
 
-def _map_call_status(call_result: CallResult, model_cls: type) -> tuple[str, Any | None]:
+def _map_call_status(
+    call_result: CallResult, model_cls: type[_ModelT]
+) -> tuple[str, _ModelT | None]:
     if call_result.parsed is not None:
-        return _STATUS_OK, call_result.parsed
+        return _STATUS_OK, cast(_ModelT, call_result.parsed)
     repaired = _try_repair(call_result.raw_content, model_cls)
     if repaired is not None:
         return _STATUS_REPAIRED, repaired
@@ -130,6 +136,6 @@ class Extractor:
                 raw_content=None,
                 latency_ms=0.0,
                 parse_status=None,
-                status=ResponseStatus.UNEXPECTED_SHAPE,
+                status=ResponseStatus.SKIPPED,
             ),
         )

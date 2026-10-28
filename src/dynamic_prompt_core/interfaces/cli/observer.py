@@ -13,20 +13,17 @@ from dynamic_prompt_core.application.use_cases.observe_cycle.observer import (
 def main() -> int:
     parser = argparse.ArgumentParser(description="Observe and report on optimization cycles")
     parser.add_argument("--config", default="config.toml")
-    parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
+    parser.add_argument("--format", choices=["markdown", "json"], default=None)
     parser.add_argument("--run-id", default="latest", help="Run ID to observe")
     args = parser.parse_args()
 
     config = CycleObserverConfig.from_config(args.config)
+    if args.format is not None:
+        config.output_format = args.format
     report_path = run_observer(args.run_id, config)
 
     with open(report_path, encoding="utf-8") as f:
-        content = f.read()
-
-    if args.format == "json":
-        print(content)
-    else:
-        print(content)
+        print(f.read())
     return 0
 
 

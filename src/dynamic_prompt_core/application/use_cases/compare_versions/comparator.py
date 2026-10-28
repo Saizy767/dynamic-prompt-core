@@ -163,11 +163,10 @@ async def _run_version_async(
 
     with open(config_path, "rb") as f:
         raw_config = tomllib.load(f)
-    default_model_path = str(raw_config.get("llm", {}).get("model_path", "model"))
 
     candidates = [Candidate(v) for v in runner_config.candidates]
     classifier = build_classifier(
-        scorer_backend_config_from_toml(raw_config, default_model_path=default_model_path),
+        scorer_backend_config_from_toml(raw_config),
         candidates,
     )
     extractor = Extractor(task=task, language=runner_config.language)
@@ -509,7 +508,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    pass  # logging configured by composition root
 
     config = VersionComparatorConfig.from_config(args.config)
 

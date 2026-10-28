@@ -15,6 +15,7 @@ class ResponseStatus(StrEnum):
     TIMEOUT = "timeout"
     NETWORK_ERROR = "network_error"
     UNEXPECTED_SHAPE = "unexpected_shape"
+    SKIPPED = "skipped"
 
 
 class ParseStatus(StrEnum):

@@ -846,29 +846,6 @@ application and SHALL preserve candidate ordering and score semantics.
 - **WHEN** the `CandidateScorer` port contract is inspected
 - **THEN** it exposes no `max_batch_size` or batch-sizing configuration
 
-### Requirement: Sequential compatibility adapter is temporary
-If a concrete model adapter cannot support native batching, that limitation
-SHALL be handled inside infrastructure. A compatibility adapter MAY implement
-batch execution by delegating to sequential execution (`forward_batch(items)`
-calls `forward(item)` for each item). This is permitted ONLY as a temporary
-transitional compatibility mechanism for adapters that lack native batch
-support. The production local-model adapter used by
-`LLMLogitCandidateScorer` MUST use native tensor batching. Sequential
-delegation is permitted only for explicitly supported compatibility adapters.
-The application SHALL NOT branch on whether batching is supported.
-
-#### Scenario: Compatibility adapter preserves contract
-- **WHEN** a model adapter does not support native batching
-- **THEN** a temporary compatibility adapter delegates to sequential execution and preserves the scoring contract
-
-#### Scenario: Production adapter uses native batching
-- **WHEN** the production local-model adapter is used
-- **THEN** it performs native tensor batching, not sequential delegation
-
-#### Scenario: Application does not branch on batch support
-- **WHEN** the application invokes the scorer
-- **THEN** it does not check whether the model adapter supports batching
-
 ### Requirement: Batch scoring preserves existing port and information boundary
 The `CandidateScorer` port, `ClassifyInput`, `Classification`, `Judgment`,
 and `ClassificationPolicy` SHALL remain unchanged. No model, tokenizer,

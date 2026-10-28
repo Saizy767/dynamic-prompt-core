@@ -90,7 +90,7 @@ def test_run_cycle_step_executes_steps_and_writes_report(
     mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
     metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
 
-    mock_pc_config = MagicMock(max_rules=10)
+    mock_pc_config = MagicMock(max_rules=10, max_prompt_tokens=100_000)
 
     with ExitStack() as stack:
         stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
@@ -177,7 +177,7 @@ def test_run_cycle_step_persists_accepted_version_to_store(
     metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
 
     prompt_v1 = _make_prompt_with_rules("classify-v1", _v0_rules() + ["rule-1"])
-    mock_pc_config = MagicMock(max_rules=10)
+    mock_pc_config = MagicMock(max_rules=10, max_prompt_tokens=100_000)
 
     with ExitStack() as stack:
         stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
@@ -393,8 +393,6 @@ def test_run_cycle_deps_requires_classifier():
             llm_client=MagicMock(),
             prompt_repository=MagicMock(),
             run_repository=MagicMock(),
-            dataset_repository=MagicMock(),
-            embedding_client=MagicMock(),
             normalizer=MagicMock(),
             extractor=MagicMock(),
             candidates=(MagicMock(),),
@@ -412,8 +410,6 @@ def test_run_cycle_deps_requires_extractor():
             llm_client=MagicMock(),
             prompt_repository=MagicMock(),
             run_repository=MagicMock(),
-            dataset_repository=MagicMock(),
-            embedding_client=MagicMock(),
             normalizer=MagicMock(),
             classifier=MagicMock(),
             candidates=(MagicMock(),),
@@ -431,8 +427,6 @@ def test_run_cycle_deps_requires_candidates():
             llm_client=MagicMock(),
             prompt_repository=MagicMock(),
             run_repository=MagicMock(),
-            dataset_repository=MagicMock(),
-            embedding_client=MagicMock(),
             normalizer=MagicMock(),
             classifier=MagicMock(),
             extractor=MagicMock(),
@@ -481,7 +475,7 @@ def test_run_round_accumulates_rules_on_accept(
     prompt_v1 = _make_prompt_with_rules("classify-v1", _v0_rules() + ["rule-1"])
     prompt_v2 = _make_prompt_with_rules("classify-v2", _v0_rules() + ["rule-1", "rule-2"])
 
-    mock_pc_config = MagicMock(max_rules=10)
+    mock_pc_config = MagicMock(max_rules=10, max_prompt_tokens=100_000)
 
     with ExitStack() as stack:
         stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
@@ -553,7 +547,7 @@ def test_run_round_stops_on_degradation(
     prompt_v1 = _make_prompt_with_rules("classify-v1", _v0_rules() + ["rule-1"])
     prompt_v2 = _make_prompt_with_rules("classify-v2", _v0_rules() + ["rule-1", "rule-2"])
 
-    mock_pc_config = MagicMock(max_rules=10)
+    mock_pc_config = MagicMock(max_rules=10, max_prompt_tokens=100_000)
 
     with ExitStack() as stack:
         stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
@@ -627,7 +621,7 @@ def test_run_round_no_acceptance_increments_rollback(
 
     prompt_v1 = _make_prompt_with_rules("classify-v1", _v0_rules() + ["rule-1"])
 
-    mock_pc_config = MagicMock(max_rules=10)
+    mock_pc_config = MagicMock(max_rules=10, max_prompt_tokens=100_000)
 
     with ExitStack() as stack:
         stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
@@ -739,3 +733,289 @@ def test_candidate_source_of_truth_in_steps():
             "BaselineRunner candidates= must be derived from deps.candidates, "
             f"not a step-local construction: {ast.dump(candidates_arg)}"
         )
+
+
+def test_refine_theses_step_merges_refined_into_full_rows(tmp_path, build_mock_deps):
+    """Regression: teacher refinement must not crash the analyzer.
+
+    The refined artifact alone lacks the analyzer's required fields
+    (true_label, statuses, theses_norm); refine_theses_step must return the
+    original rows with the refined theses merged in.
+    """
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
+        refine_theses_step,
+    )
+    from dynamic_prompt_core.domain.services.thesis_refinement import (
+        RefinementReview,
+    )
+
+    class _DroppingTeacher:
+        async def review_theses(self, text, theses):
+            return RefinementReview(
+                keep=["thesis one"],
+                reformulate=[],
+                drop=[{"thesis": "thesis two", "reason": "noisy"}],
+                add=["thesis three"],
+                latency_ms=1.0,
+                usage={},
+            )
+
+    results_path = tmp_path / "results_test-run_v1_dev_20260101T000000Z.jsonl"
+    row = {
+        "id": 1,
+        "text": "a",
+        "true_label": 1,
+        "predicted_decision": 1,
+        "selected_candidate": "1",
+        "judgment_scores": {"0": 0.1, "1": 0.9},
+        "theses_raw": ["thesis one", "thesis two"],
+        "theses_norm": ["thesis one", "thesis two"],
+        "extract_status": "ok",
+        "classify_status": "ok",
+        "extract_latency_ms": 1.0,
+        "classify_latency_ms": 1.0,
+        "raw_extract": None,
+    }
+    with open(results_path, "w") as f:
+        f.write(json.dumps(row) + "\n")
+
+    deps = build_mock_deps(teacher=_DroppingTeacher())
+    language = MagicMock()
+    language.language = "ru"
+    with patch(f"{STEPS}.RunnerConfig.from_config", return_value=language):
+        merged = asyncio.run(
+            refine_theses_step(str(results_path), "test-run", "v1", deps, "config.toml")
+        )
+
+    assert merged is not None
+    assert len(merged) == 1
+    merged_row = merged[0]
+    assert merged_row["id"] == 1
+    assert merged_row["true_label"] == 1
+    assert merged_row["classify_status"] == "ok"
+    assert merged_row["extract_status"] == "ok"
+    assert merged_row["theses_raw"] == ["thesis one", "thesis three"]
+    assert merged_row["theses_norm"] == ["thesis one", "thesis three"]
+
+
+def test_refine_theses_step_without_teacher_returns_none(build_mock_deps):
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
+        refine_theses_step,
+    )
+
+    deps = build_mock_deps(teacher=None)
+    merged = asyncio.run(
+        refine_theses_step("results.jsonl", "test-run", "v1", deps, "config.toml")
+    )
+    assert merged is None
+
+
+def test_update_thesis_collection_uses_refined_rows(tmp_path):
+    """With refined_rows given, the raw artifact is not loaded; names still
+    come from results_path."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
+        update_thesis_collection,
+    )
+
+    results_path = str(tmp_path / "results_test-run_v1_dev_20260101T000000Z.jsonl")
+    refined_rows = [{"id": 1, "true_label": 1, "theses_norm": ["t1"], "theses_raw": ["t1"],
+                     "extract_status": "ok", "classify_status": "ok"}]
+    with (
+        patch(f"{STEPS}.ThesisAnalyzerConfig.from_config", return_value=MagicMock()),
+        patch(
+            f"{STEPS}.analyze",
+            return_value=(MagicMock(), {"run_id": "test-run", "prompt_version": "v1"}),
+        ) as mock_analyze,
+        patch(f"{STEPS}.write_dump", return_value="thesis_bank.json") as mock_dump,
+    ):
+        bank_path, clusters_path = update_thesis_collection(
+            results_path, "config.toml", refined_rows=refined_rows
+        )
+
+    rows_arg, _cfg, source_arg = mock_analyze.call_args[0]
+    assert rows_arg is refined_rows
+    assert source_arg == results_path
+    assert bank_path == "thesis_bank.json"
+    assert clusters_path == "thesis_bank.json"
+    assert mock_dump.called
+
+
+def test_active_holdout_failure_is_retried(
+    build_mock_deps,
+    cycle_config,
+    tmp_output_dir,
+):
+    """Regression: one transient failure of the active holdout run must not
+    doom the round — it is retried once and the round proceeds."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
+
+    deps = build_mock_deps()
+    state = CycleState(run_id="test-run")
+    log_path = os.path.join(tmp_output_dir, "cycle_log.jsonl")
+    os.makedirs(tmp_output_dir, exist_ok=True)
+
+    mock_runner = AsyncMock()
+    mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
+    metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
+    holdout_metrics = {
+        "accuracy": 0.5,
+        "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5},
+    }
+
+    flaky_holdout = AsyncMock(
+        side_effect=[RuntimeError("server hiccup"), holdout_metrics]
+    )
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
+        stack.enter_context(patch(f"{STEPS}.compute_dev_metrics", return_value=metrics))
+        stack.enter_context(
+            patch(
+                f"{STEPS}.update_thesis_collection",
+                return_value=("thesis.json", "clusters.json"),
+            )
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.select_candidates", return_value=("cands.json", []))
+        )
+        stack.enter_context(patch(f"{STEPS}.run_holdout", flaky_holdout))
+        stack.enter_context(
+            patch(f"{STEPS}.PromptComposerConfig.from_config", return_value=MagicMock(max_rules=10))
+        )
+        stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
+
+        updated = asyncio.run(run_cycle_step(state, deps, cycle_config, "config.toml", log_path))
+
+    assert flaky_holdout.await_count == 2
+    assert updated.latest_report_path == "report.json"
+
+
+def test_active_holdout_persistent_failure_raises(
+    build_mock_deps,
+    cycle_config,
+    tmp_output_dir,
+):
+    """Two failed attempts abort the round with a clear error instead of
+    silently rolling every candidate back and stopping with no_improvement."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.report import (
+        CycleOrchestratorError,
+    )
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
+
+    deps = build_mock_deps()
+    state = CycleState(run_id="test-run")
+    log_path = os.path.join(tmp_output_dir, "cycle_log.jsonl")
+    os.makedirs(tmp_output_dir, exist_ok=True)
+
+    mock_runner = AsyncMock()
+    mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
+    metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
+
+    failing_holdout = AsyncMock(side_effect=RuntimeError("server down"))
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
+        stack.enter_context(patch(f"{STEPS}.compute_dev_metrics", return_value=metrics))
+        stack.enter_context(
+            patch(
+                f"{STEPS}.update_thesis_collection",
+                return_value=("thesis.json", "clusters.json"),
+            )
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.select_candidates", return_value=("cands.json", []))
+        )
+        stack.enter_context(patch(f"{STEPS}.run_holdout", failing_holdout))
+
+        with pytest.raises(CycleOrchestratorError, match="holdout baseline unavailable"):
+            asyncio.run(run_cycle_step(state, deps, cycle_config, "config.toml", log_path))
+
+    assert failing_holdout.await_count == 2
+
+
+def test_run_round_skips_candidate_rejected_by_limits(
+    build_mock_deps,
+    cycle_config,
+    tmp_output_dir,
+):
+    """A candidate whose composed prompt fails validate_limits is skipped;
+    the next candidate is still evaluated and can be accepted."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.steps import run_cycle_step
+    from dynamic_prompt_core.domain.prompts.base import (
+        PromptArtifact,
+        PromptLayer,
+        render,
+    )
+
+    deps = build_mock_deps()
+    state = CycleState(run_id="test-run")
+    log_path = os.path.join(tmp_output_dir, "cycle_log.jsonl")
+    os.makedirs(tmp_output_dir, exist_ok=True)
+
+    mock_runner = AsyncMock()
+    mock_runner.run = AsyncMock(return_value=([], "fake_results.jsonl"))
+    metrics = {"accuracy": 0.5, "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5}}
+
+    bad_layers = PromptLayer(
+        role="test role",
+        task="test task",
+        rules=_v0_rules() + ["rule-1"],
+        output_contract="",
+        fallback="test fallback",
+    )
+    prompt_bad = PromptArtifact(version="v1_1", layers=bad_layers, text=render(bad_layers))
+    prompt_good = _make_prompt_with_rules("classify-v1", _v0_rules() + ["rule-2"])
+
+    mock_pc_config = MagicMock(max_rules=10, max_prompt_tokens=100_000)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
+        stack.enter_context(patch(f"{STEPS}.compute_dev_metrics", return_value=metrics))
+        stack.enter_context(
+            patch(
+                f"{STEPS}.update_thesis_collection",
+                return_value=("thesis.json", "clusters.json"),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.select_candidates",
+                return_value=("cands.json", [{"cluster_id": 1}, {"cluster_id": 2}]),
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.compose_new_version",
+                new_callable=AsyncMock,
+                side_effect=[
+                    (prompt_bad, "prompt_bad.json", [1]),
+                    (prompt_good, "prompt_good.json", [2]),
+                ],
+            )
+        )
+        stack.enter_context(
+            patch(
+                f"{STEPS}.run_new_on_dev",
+                new_callable=AsyncMock,
+                return_value="new_results.jsonl",
+            )
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.decide", side_effect=[("accept", "improved")])
+        )
+        stack.enter_context(
+            patch(f"{STEPS}.PromptComposerConfig.from_config", return_value=mock_pc_config)
+        )
+        holdout_mock = stack.enter_context(
+            patch(f"{STEPS}.run_holdout", new_callable=AsyncMock, return_value={"accuracy": 0.5})
+        )
+        stack.enter_context(patch(f"{STEPS}.write_report", return_value="report.json"))
+        stack.enter_context(patch(f"{STEPS}.update_in_prompt_flags"))
+
+        updated = asyncio.run(run_cycle_step(state, deps, cycle_config, "config.toml", log_path))
+
+    assert updated.active_version.version == "v1"
+    assert updated.any_accepted is True
+    # active-baseline holdout + the one valid candidate; the rejected
+    # candidate never reaches holdout
+    assert holdout_mock.await_count == 2

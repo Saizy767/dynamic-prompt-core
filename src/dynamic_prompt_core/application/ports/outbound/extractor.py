@@ -1,10 +1,26 @@
 """Outbound port: contract for key-phrase extraction."""
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     import aiohttp
+
+
+class ExtractionResult(Protocol):
+    """Result of a key-phrase extraction call.
+
+    Concrete implementations expose additional infrastructure-specific
+    fields (e.g. ``call_result``); this interface declares only the
+    application-level attributes.
+    """
+
+    theses_raw: list[str]
+    theses_norm: list[str]
+    status: str
+    latency_ms: float
+    raw_extract: str | None
 
 
 @runtime_checkable
@@ -20,11 +36,11 @@ class Extractor(Protocol):
         session: aiohttp.ClientSession,
         text: str,
         true_val: int | None = None,
-    ) -> Any:
+    ) -> ExtractionResult:
         """Extract key phrases from ``text``."""
         ...
 
     @staticmethod
-    def skipped() -> Any:
+    def skipped() -> ExtractionResult:
         """Return a skipped extraction result."""
         ...

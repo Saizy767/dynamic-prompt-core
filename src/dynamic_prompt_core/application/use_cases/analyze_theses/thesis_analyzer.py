@@ -15,19 +15,24 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import logging
 import os
 import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
 from dynamic_prompt_core.application.services.metrics.metrics import (
     parse_artifact_name,
 )
+from dynamic_prompt_core.infrastructure.storage.run_repository import _atomic_write
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +59,9 @@ REQUIRED_FIELDS = (
 
 class ThesisAnalyzerError(ValueError):
     """Raised when a results artifact is invalid or cannot be loaded."""
+
+
+_write_counter = itertools.count()
 
 
 # --------------------------------------------------------------------------- #
@@ -129,7 +137,7 @@ def filter_ok_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 #  Embeddings (lazy-loaded, matching normalize.py's pattern)
 # --------------------------------------------------------------------------- #
-_embedding_model: object | None = None
+_embedding_model: SentenceTransformer | None = None
 _embedding_model_name: str | None = None
 _embedding_model_device: str | None = None
 
@@ -179,7 +187,7 @@ def resolve_embedding_device(device: str) -> str:
     return "cpu"
 
 
-def _get_embedding_model(model_name: str, device: str = "auto") -> Any:
+def _get_embedding_model(model_name: str, device: str = "auto") -> SentenceTransformer:
     """Lazy-load and cache a SentenceTransformer model.
 
     The cache key is ``(model_name, resolved_device)`` so changing the device
@@ -195,6 +203,7 @@ def _get_embedding_model(model_name: str, device: str = "auto") -> Any:
     ):
         try:
             from sentence_transformers import SentenceTransformer
+
         except ImportError as exc:
             raise ImportError(
                 "Thesis analysis requires 'sentence-transformers'; "
@@ -211,7 +220,7 @@ def compute_embedding(text_norm: str, model_name: str, device: str = "auto") -> 
     """Compute a float32 embedding vector for a normalized thesis."""
     model = _get_embedding_model(model_name, device=device)
     vec = model.encode(text_norm, convert_to_numpy=True)
-    return cast(np.ndarray, vec.astype(np.float32))
+    return vec.astype(np.float32)
 
 
 def precompute_embeddings(
@@ -308,6 +317,26 @@ class Cluster:
         self.member_norms.append(text_norm)
         self.count += 1
 
+    def add_member_counters(
+        self,
+        frequency: int,
+        positive_hits: int,
+        negative_hits: int,
+        demand: int = 0,
+        selected: int = 0,
+    ) -> None:
+        """Incrementally add one member's counter deltas (O(1)).
+
+        precision = positive_hits / frequency, which equals the frequency-
+        weighted member mean computed by recompute_cluster_counters.
+        """
+        self.frequency += frequency
+        self.positive_hits += positive_hits
+        self.negative_hits += negative_hits
+        self.demand += demand
+        self.selected += selected
+        self.precision = self.positive_hits / self.frequency if self.frequency > 0 else 0.0
+
 
 # --------------------------------------------------------------------------- #
 #  Thesis bank
@@ -367,7 +396,9 @@ class ThesisBank:
                 entry.negative_hits += 1
             entry.text_raw = text_raw
             if entry.cluster_id is not None:
-                self.recompute_cluster_counters(entry.cluster_id)
+                self._clusters[entry.cluster_id].add_member_counters(
+                    1, 1 if true_label == 1 else 0, 1 if true_label == 0 else 0
+                )
         return entry
 
     def assign_cluster(self, entry: ThesisEntry) -> None:
@@ -420,7 +451,13 @@ class ThesisBank:
         assert entry.embedding is not None
         cluster.add_member(entry.text_norm, entry.embedding)
         entry.cluster_id = cluster_id
-        self.recompute_cluster_counters(cluster_id)
+        cluster.add_member_counters(
+            entry.frequency,
+            entry.positive_hits,
+            entry.negative_hits,
+            entry.demand,
+            entry.selected,
+        )
 
     def _create_cluster(self, entry: ThesisEntry) -> None:
         cid = self._next_cluster_id
@@ -430,13 +467,22 @@ class ThesisBank:
         cluster.add_member(entry.text_norm, entry.embedding)
         entry.cluster_id = cid
         self._clusters[cid] = cluster
-        self.recompute_cluster_counters(cid)
+        cluster.add_member_counters(
+            entry.frequency,
+            entry.positive_hits,
+            entry.negative_hits,
+            entry.demand,
+            entry.selected,
+        )
 
     def recompute_cluster_counters(self, cluster_id: int) -> None:
         """Aggregate cluster counters from member theses.
 
         Sums frequency/positive_hits/negative_hits/demand/selected;
         precision is the frequency-weighted mean of member precisions.
+
+        Internal updates are incremental; call this only to resync after
+        externally mutating member entries.
         """
         cluster = self._clusters[cluster_id]
         total_freq = 0
@@ -479,7 +525,6 @@ def write_dump(
     Filename: thesis_bank/thesis_bank_{run_id}_{prompt_version}_{timestamp}.json
     """
     output_dir = os.path.join(output_dir, "thesis_bank")
-    os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     name = f"thesis_bank_{run_id}_{prompt_version}_{timestamp}.json"
     path = os.path.join(output_dir, name)
@@ -532,8 +577,8 @@ def write_dump(
         "clusters": clusters_data,
     }
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(dump, f, ensure_ascii=False, indent=2)
+    payload = json.dumps(dump, ensure_ascii=False, indent=2)
+    _atomic_write(path, payload, _write_counter)
     return path
 
 
@@ -591,6 +636,29 @@ def load_dump(path: str, config: ThesisAnalyzerConfig) -> ThesisBank:
 
     bank._next_cluster_id = max_cid + 1
     return bank
+
+
+def carry_over_in_prompt_flags(bank: ThesisBank, previous_bank_path: str) -> int:
+    """Seed ``in_prompt`` on ``bank`` from a previous cycle's bank dump.
+
+    Theses are matched by normalized text.  Returns the number of newly
+    flagged theses.  This lets the candidate selector exclude clusters whose
+    rules are already in the active prompt, across cycles — without it every
+    cycle rebuilds a fresh bank and re-selects accepted clusters.
+    """
+    with open(previous_bank_path, encoding="utf-8") as f:
+        previous = json.load(f)
+    flagged = {
+        norm
+        for norm, entry in previous.get("theses", {}).items()
+        if entry.get("in_prompt")
+    }
+    count = 0
+    for norm, entry in bank.theses.items():
+        if norm in flagged:
+            entry.in_prompt = True
+            count += 1
+    return count
 
 
 # --------------------------------------------------------------------------- #
@@ -675,7 +743,6 @@ def main() -> None:
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     args = parser.parse_args()
 
-    pass  # logging configured by composition root
 
     config = ThesisAnalyzerConfig.from_config(args.config)
     rows = load_results(args.results)

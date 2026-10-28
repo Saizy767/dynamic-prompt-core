@@ -42,11 +42,7 @@ class CycleConfig:
     holdout_split: str = DEFAULT_HOLDOUT_SPLIT
     run_id: str = ""
     output_dir: str = DEFAULT_OUTPUT_DIR
-    prompt_store_path: str = ""
     prompt_start: str = "0"
-    thesis_bank_path: str = ""
-    candidate_queue_path: str = ""
-    stop_on_first_error: bool = False
     dump_state_after_each_cycle: bool = True
     use_teacher_refinement: bool = False
     duration: int | list[int] = 0
@@ -97,11 +93,7 @@ class CycleConfig:
             holdout_split=s.get("holdout_split", DEFAULT_HOLDOUT_SPLIT),
             run_id=s.get("run_id", ""),
             output_dir=s.get("output_dir", DEFAULT_OUTPUT_DIR),
-            prompt_store_path=s.get("prompt_store_path", ""),
             prompt_start=s.get("prompt_start", "0"),
-            thesis_bank_path=s.get("thesis_bank_path", ""),
-            candidate_queue_path=s.get("candidate_queue_path", ""),
-            stop_on_first_error=bool(s.get("stop_on_first_error", False)),
             dump_state_after_each_cycle=bool(s.get("dump_state_after_each_cycle", True)),
             use_teacher_refinement=bool(s.get("use_teacher_refinement", False)),
             duration=duration,

@@ -6,12 +6,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
-from dynamic_prompt_core.application.ports.outbound.dataset_repository import (
-    DatasetRepository,
-)
-from dynamic_prompt_core.application.ports.outbound.embedding_client import (
-    EmbeddingClient,
-)
 from dynamic_prompt_core.application.ports.outbound.extractor import Extractor
 from dynamic_prompt_core.application.ports.outbound.llm_client import LLMClient
 from dynamic_prompt_core.application.ports.outbound.normalizer import Normalizer
@@ -45,8 +39,6 @@ class RunCycleDeps:
     llm_client: LLMClient
     prompt_repository: PromptRepository
     run_repository: RunRepository
-    dataset_repository: DatasetRepository
-    embedding_client: EmbeddingClient
     normalizer: Normalizer
     classifier: Classifier
     extractor: Extractor

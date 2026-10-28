@@ -21,10 +21,10 @@ def build_classifier(
 ) -> Classifier:
     """Construct a ``Classifier`` backed by LLM logits.
 
-    Dispatches on ``config.backend``: ``"huggingface"``, ``"gguf"``, or
-    ``"llama_server"``.  All return an ``LLMLogitClassifier`` with the
-    shared ``ClassifierPromptBuilder`` (loaded from the classifier system
-    prompt resource) and ``LogitScorer``.
+    Dispatches on ``config.backend``: the sole backend is ``"llama_server"``
+    (HTTP scoring against a running llama-server).  Returns an
+    ``LLMLogitClassifier`` with the shared ``ClassifierPromptBuilder`` (loaded
+    from the classifier system-prompt resource) and ``LogitScorer``.
     """
     from dynamic_prompt_core.infrastructure.llm.classifier import LLMLogitClassifier
     from dynamic_prompt_core.infrastructure.llm.prompts import load_prompt
@@ -39,16 +39,18 @@ def build_classifier(
     prompt_builder = ClassifierPromptBuilder(system_prompt=system_prompt)
     logit_scorer = LogitScorer()
 
+    assert config.llama_server is not None
     log.info(
-        "Building classifier: backend=%s, model_path=%s",
-        config.backend, config.model_path,
+        "Building classifier: backend=%s, endpoint=%s",
+        config.backend, config.llama_server.endpoint,
     )
-    if config.backend == "gguf":
-        tokenizer, model = _build_gguf_adapters(config)
-    elif config.backend == "llama_server":
+    if config.backend == "llama_server":
         tokenizer, model = _build_llama_server_adapters(config)
     else:
-        tokenizer, model = _build_huggingface_adapters(config)
+        raise ValueError(
+            f"unsupported scorer backend {config.backend!r}; "
+            f"ScorerBackendConfig validation should have rejected it"
+        )
 
     return LLMLogitClassifier(
         prompt_builder=prompt_builder,
@@ -59,49 +61,7 @@ def build_classifier(
     )
 
 
-def _build_huggingface_adapters(
-    config: ScorerBackendConfig,
-) -> tuple[object, object]:
-    from transformers import AutoModelForCausalLM
-
-    from dynamic_prompt_core.infrastructure.llm.scoring.model_adapter import (
-        TorchBatchedCausalLMAdapter,
-    )
-    from dynamic_prompt_core.infrastructure.llm.scoring.tokenizer_adapter import (
-        HuggingFaceBatchTokenizerAdapter,
-    )
-
-    hf_model = AutoModelForCausalLM.from_pretrained(config.model_path)
-    return (
-        HuggingFaceBatchTokenizerAdapter(config.model_path),
-        TorchBatchedCausalLMAdapter(hf_model, model_path=config.model_path),
-    )
-
-
-def _build_gguf_adapters(config: ScorerBackendConfig) -> tuple[object, object]:
-    from dynamic_prompt_core.infrastructure.llm.scoring.llama_cpp_adapter import (
-        LlamaCppBatchedCausalLMAdapter,
-        LlamaCppBatchTokenizerAdapter,
-    )
-
-    assert config.gguf is not None
-    model_adapter = LlamaCppBatchedCausalLMAdapter(
-        model_path=config.model_path,
-        n_ctx=config.gguf.n_ctx,
-        n_batch=config.gguf.n_batch,
-        n_threads=config.gguf.n_threads,
-        n_gpu_layers=config.gguf.n_gpu_layers,
-        seed=config.gguf.seed,
-        verbose=config.gguf.verbose,
-        logits_all=config.gguf.logits_all,
-    )
-    tokenizer_adapter = LlamaCppBatchTokenizerAdapter(model_adapter.llama)
-    return tokenizer_adapter, model_adapter
-
-
-def _build_llama_server_adapters(
-    config: ScorerBackendConfig,
-) -> tuple[object, object]:
+def _build_llama_server_adapters(config: ScorerBackendConfig) -> tuple[object, object]:
     from dynamic_prompt_core.infrastructure.llm.scoring.llama_server_model_adapter import (
         LlamaServerCausalLMAdapter,
     )

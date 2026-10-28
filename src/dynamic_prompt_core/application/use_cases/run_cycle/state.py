@@ -132,14 +132,17 @@ def update_in_prompt_flags(
     """Set ``in_prompt`` on theses in the thesis bank and persist.
 
     Theses whose ``cluster_id`` is in ``accepted_cluster_ids`` get
-    ``in_prompt=true``; all others get ``false``.
+    ``in_prompt=true``.  Theses already flagged (carried over from an
+    earlier cycle's bank) stay ``true`` — their rules remain in the active
+    prompt, so clearing them would let the selector re-propose them as
+    duplicate rules next cycle.
     """
     with open(thesis_bank_path, encoding="utf-8") as f:
         bank = json.load(f)
     theses = bank.get("theses", {})
     for _norm, entry in theses.items():
         cid = str(entry.get("cluster_id", ""))
-        entry["in_prompt"] = cid in accepted_cluster_ids
+        entry["in_prompt"] = bool(entry.get("in_prompt", False)) or cid in accepted_cluster_ids
 
     directory = os.path.dirname(thesis_bank_path) or "."
     tmp = os.path.join(

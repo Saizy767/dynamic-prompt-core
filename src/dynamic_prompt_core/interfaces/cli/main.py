@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
 import tomllib
@@ -38,8 +37,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sub = parser.add_subparsers(dest="command")
 
     cycle = sub.add_parser("cycle", help="Run the optimization cycle")
-    cycle.add_argument("--split", default="dev", help="Dataset split to use")
-    cycle.add_argument("--cycles", type=int, default=3, help="Number of optimization cycles")
+    cycle.add_argument(
+        "--split",
+        default=None,
+        help="Dataset split to use (default: dev_split from config)",
+    )
+    cycle.add_argument(
+        "--cycles",
+        type=int,
+        default=None,
+        help="Number of optimization cycles (default: max_cycles from config)",
+    )
     cycle.add_argument("--resume", default=None, help="Resume from a state dump JSON file")
 
     refine = sub.add_parser("refine", help="Run teacher thesis refinement")
@@ -75,57 +83,15 @@ class _NormalizerAdapter:
         return normalize_theses(theses, lang)
 
 
-class _DatasetRepositoryAdapter:
-    """Thin adapter for dataset loading via JSONL artifact files."""
-
-    def load_dataset(self, path: str) -> list[Any]:
-        from dynamic_prompt_core.domain.models.dataset import Record
-
-        records: list[Any] = []
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                records.append(Record(id=row["id"], text=row["text"], label=row["label"]))
-        return records
-
-    def load_artifact(self, path: str) -> Any:
-        from dynamic_prompt_core.infrastructure.data import load_artifact
-
-        return load_artifact(path)
-
-    def write_artifact(
-        self,
-        dataset: Any,
-        output_dir: str = "data",
-        fmt: str = "jsonl",
-        notes: str = "",
-    ) -> str:
-        raise NotImplementedError("write_artifact not needed for run_cycle")
-
-
-class _EmbeddingClientAdapter:
-    """Thin adapter wrapping thesis_analyzer.compute_embedding."""
-
-    def embed_one(self, text: str) -> list[float]:
-        from dynamic_prompt_core.application.use_cases.analyze_theses.thesis_analyzer import (
-            compute_embedding,
-        )
-
-        return compute_embedding(text, "all-MiniLM-L6-v2", device="auto").tolist()
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        return [self.embed_one(t) for t in texts]
-
-
 def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     """Assemble all dependencies for the run_cycle use case.
 
     This is the composition root: it creates concrete infrastructure
     implementations and passes them through the typed dependency object.
     """
+    from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
+        RunnerConfig,
+    )
     from dynamic_prompt_core.domain.models.candidate import Candidate
     from dynamic_prompt_core.infrastructure.llm import AsyncTask
     from dynamic_prompt_core.infrastructure.llm.classifier_factory import (
@@ -151,19 +117,17 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     store = init_store(store_config)
     run_repo = FileRunRepository()
     normalizer = _NormalizerAdapter()
-    dataset_repo = _DatasetRepositoryAdapter()
-    embedding_client = _EmbeddingClientAdapter()
 
-    model_path = toml_config.get("llm", {}).get("model_path", "model")
     candidates = tuple(
-        Candidate(v)
-        for v in toml_config.get("classification", {}).get("candidates", ["0", "1"])
+        Candidate(v) for v in toml_config.get("classification", {}).get("candidates", ["0", "1"])
     )
     classifier = build_classifier(
-        scorer_backend_config_from_toml(toml_config, default_model_path=model_path),
+        scorer_backend_config_from_toml(toml_config),
         list(candidates),
     )
-    extractor = Extractor(task=llm, language=toml_config.get("runner", {}).get("language", "ru"))  # type: ignore[arg-type]
+    extractor = Extractor(
+        task=llm, language=RunnerConfig.from_config(config_path).language
+    )
 
     teacher_llm_client = None
     try:
@@ -202,8 +166,6 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
         llm_client=llm,  # type: ignore[arg-type]
         prompt_repository=store,
         run_repository=run_repo,
-        dataset_repository=dataset_repo,
-        embedding_client=embedding_client,
         normalizer=normalizer,
         classifier=classifier,
         extractor=extractor,
@@ -304,17 +266,22 @@ async def main(argv: list[str] | None = None) -> int:
         return 1
 
     deps = build_cli_deps(cfg, config_path)
-    cycles = getattr(args, "cycles", None) or 3
-    split = getattr(args, "split", None) or "dev"
+    cycles = getattr(args, "cycles", None)
+    split = getattr(args, "split", None)
     resume_from = getattr(args, "resume", None)
 
     cycle_config = CycleConfig.from_toml(config_path)
-    if cycles != cycle_config.max_cycles:
+    overrides: dict[str, Any] = {}
+    if cycles is not None and cycles != cycle_config.max_cycles:
+        # A list duration would re-override max_cycles in __post_init__;
+        # collapse it so the user's --cycles survives.
         d = cycle_config.duration
-        duration_val = d[0] if isinstance(d, list) and d else d
-        cycle_config = type(cycle_config)(
-            **{**cycle_config.__dict__, "max_cycles": cycles, "duration": duration_val}
-        )
+        overrides["max_cycles"] = cycles
+        overrides["duration"] = d[0] if isinstance(d, list) and d else d
+    if split is not None and split != cycle_config.dev_split:
+        overrides["dev_split"] = split
+    if overrides:
+        cycle_config = type(cycle_config)(**{**cycle_config.__dict__, **overrides})
 
     try:
         from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.config import (
@@ -336,8 +303,6 @@ async def main(argv: list[str] | None = None) -> int:
 
     run_input = RunCycleInput(
         config_path=config_path,
-        max_cycles=cycles,
-        dev_split=split,
         resume_from=resume_from,
         config=cycle_config,
     )

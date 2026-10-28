@@ -131,8 +131,8 @@ def load_initial_state(
     """Load the initial cycle state.
 
     Loads the active prompt via ``deps.prompt_repository`` (or v0 when no
-    active version exists) and the dataset via ``deps.dataset_repository``.
-    Raises ``CycleOrchestratorError`` when a required artifact is missing.
+    active version exists).  Raises ``CycleOrchestratorError`` when a
+    required artifact is missing.
     """
     run_id = config.run_id or f"cycle-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
@@ -199,12 +199,6 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
     It does not instantiate infrastructure classes directly.
     """
     config = run_input.config or CycleConfig.from_toml(run_input.config_path)
-    if run_input.max_cycles != config.max_cycles:
-        d = config.duration
-        duration_val = d[0] if isinstance(d, list) and d else d
-        config = type(config)(
-            **{**config.__dict__, "max_cycles": run_input.max_cycles, "duration": duration_val}
-        )
 
     output_dir = config.output_dir
     os.makedirs(output_dir, exist_ok=True)

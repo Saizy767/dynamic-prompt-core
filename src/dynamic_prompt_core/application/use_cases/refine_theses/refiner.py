@@ -69,27 +69,6 @@ def load_candidates(path: str) -> list[dict[str, Any]]:
     return rows
 
 
-def split_candidates(
-    rows: list[dict[str, Any]],
-    log_fn: Any | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Split rows into (to_process, skipped).
-
-    Rows with extract_status == 'failed' are skipped. The skip is logged via
-    log_fn(operation, id, details) when provided.
-    """
-    to_process: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    for row in rows:
-        if row.get("extract_status") == _EXTRACT_STATUS_FAILED:
-            skipped.append(row)
-            if log_fn is not None:
-                log_fn("skip", row["id"], {"reason": "extract_status=failed"})
-        else:
-            to_process.append(row)
-    return to_process, skipped
-
-
 # --------------------------------------------------------------------------- #
 #  Refined artifact write and reload
 # --------------------------------------------------------------------------- #

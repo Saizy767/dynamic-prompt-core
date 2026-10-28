@@ -4,32 +4,36 @@ Lemmatize + lower-case + collapse whitespace, preserving negation particles
 (не, нет, без, никогда) unchanged. Both NLP libraries are imported lazily so
 this module imports without them installed.
 """
+
 from __future__ import annotations
 
 import re
-from typing import Any, cast
+from typing import TYPE_CHECKING, cast
 
 NEGATION_PARTICLES = {"не", "нет", "без", "никогда"}
 
-_ru_morph: Any = None
-_en_nlp: Any = None
+if TYPE_CHECKING:
+    import pymorphy3
+    from spacy.language import Language
+
+_ru_morph: pymorphy3.MorphAnalyzer | None = None
+_en_nlp: Language | None = None
 
 
-def _get_ru_morph() -> Any:
+def _get_ru_morph() -> pymorphy3.MorphAnalyzer:
     global _ru_morph
     if _ru_morph is None:
         try:
             import pymorphy3
         except ImportError as exc:
             raise ImportError(
-                "Russian normalization requires 'pymorphy3'; "
-                "install with: pip install pymorphy3"
+                "Russian normalization requires 'pymorphy3'; install with: pip install pymorphy3"
             ) from exc
         _ru_morph = pymorphy3.MorphAnalyzer()
     return _ru_morph
 
 
-def _get_en_nlp() -> Any:
+def _get_en_nlp() -> Language:
     global _en_nlp
     if _en_nlp is None:
         try:
@@ -58,7 +62,7 @@ def _lemmatize_word(word: str, lang: str) -> str:
         nlp = _get_en_nlp()
         doc = nlp(word)
         if doc and doc[0].lemma_:
-            return cast(str, doc[0].lemma_)
+            return doc[0].lemma_
         return word
     return word
 

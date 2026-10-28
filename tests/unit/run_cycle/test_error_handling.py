@@ -25,18 +25,6 @@ def test_unrecoverable_error_raises_cycle_orchestrator_error():
     assert issubclass(CycleOrchestratorError, ValueError)
 
 
-def test_stop_on_first_error_config():
-    """stop_on_first_error config flag is readable."""
-    config = CycleConfig(stop_on_first_error=True)
-    assert config.stop_on_first_error is True
-
-
-def test_stop_on_first_error_default_is_false():
-    """stop_on_first_error defaults to False."""
-    config = CycleConfig()
-    assert config.stop_on_first_error is False
-
-
 def test_unrecoverable_stop_reason_is_enumerated():
     """unrecoverable_error is a valid stop reason."""
     from dynamic_prompt_core.application.use_cases.run_cycle.report import (

@@ -135,14 +135,14 @@ class RejectedAttempt:
 @dataclass
 class MetricTrendRow:
     round_number: int
-    accuracy: Any
-    macro_f1: Any
-    minority_f1: Any
-    parse_failures: Any
-    holdout_accuracy: Any = None
-    holdout_macro_f1: Any = None
-    holdout_minority_f1: Any = None
-    holdout_parse_failures: Any = None
+    accuracy: float | str | None
+    macro_f1: float | str | None
+    minority_f1: float | str | None
+    parse_failures: float | str | None
+    holdout_accuracy: float | str | None = None
+    holdout_macro_f1: float | str | None = None
+    holdout_minority_f1: float | str | None = None
+    holdout_parse_failures: float | str | None = None
 
 
 @dataclass
@@ -188,7 +188,7 @@ class MetricDelta:
     start: Any
     final: Any
     absolute: Any
-    relative: Any
+    relative: float | str | None
 
 
 @dataclass
@@ -245,12 +245,6 @@ def _utc_iso() -> str:
 # --------------------------------------------------------------------------- #
 #  Helpers
 # --------------------------------------------------------------------------- #
-def _safe_metric(metrics: dict[str, Any] | None, key: str) -> Any:
-    if not metrics:
-        return None
-    return metrics.get(key)
-
-
 def _as_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -626,13 +620,13 @@ def build_rejected_attempts(
 # --------------------------------------------------------------------------- #
 #  Section builders — metric trends, changed decisions, thesis summary, final
 # --------------------------------------------------------------------------- #
-def _metric_or_na(metrics: dict[str, Any] | None, key: str) -> Any:
+def _metric_or_na(metrics: dict[str, Any] | None, key: str) -> float | str | None:
     if not metrics:
         return "N/A"
     if key not in metrics or metrics[key] is None:
         log.warning("metric %s absent for a round; marking N/A", key)
         return "N/A"
-    return metrics[key]
+    return cast(float | str | None, metrics[key])
 
 
 def build_metric_trends(bundle: CycleArtifacts, config: CycleObserverConfig) -> MetricTrends:
@@ -771,7 +765,7 @@ def build_final_observation(
         if start_v is not None and final_v is not None:
             absolute = final_v - start_v
             if start_v == 0:
-                relative: Any = "N/A"
+                relative: float | str | None = "N/A"
                 log.warning("start metric %s is 0; relative marked N/A", key)
             else:
                 relative = (final_v - start_v) / start_v
@@ -1126,7 +1120,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    pass  # logging configured by composition root
 
     config = CycleObserverConfig.from_config(args.config)
     if args.format is not None:

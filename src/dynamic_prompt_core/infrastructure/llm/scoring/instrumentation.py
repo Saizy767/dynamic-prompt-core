@@ -1,4 +1,4 @@
-"""Per-stage performance instrumentation for the GGUF scoring path.
+"""Per-stage performance instrumentation for the scoring path.
 
 Records monotonic timings (milliseconds) and integer counters for one
 scoring request so a single run can localize the dominant bottleneck.

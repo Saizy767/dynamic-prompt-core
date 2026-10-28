@@ -37,33 +37,20 @@ threads = 2          # llamacpp: -t (CPU threads); vllm: ignored
 startup_timeout = 60
 
 # Scorer backend selection for candidate-scoring classification.
-# The baseline runner and optimization cycle build the CandidateScorer from
-# this section. When absent, defaults to the Hugging Face backend with
-# [llm].model_path (preserving existing behavior).
+# The baseline runner and optimization cycle build the classifier from
+# this section. llama_server is the only scoring backend: it scores each
+# candidate token by forcing generation via logit_bias on the running
+# llama-server (/v1/completions) and reading the token's true
+# full-vocabulary log-prob (validated on llama.cpp 0.5.0). No in-process
+# model is loaded for classification.
 [model]
-# Backend: "huggingface" (transformers), "gguf" (llama-cpp-python, optional),
-# or "llama_server" (HTTP via llama-server, uses Metal GPU acceleration).
 backend = "llama_server"
-# Model path: HF repo id / local dir (huggingface) or GGUF file path (gguf).
-model_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
 
-# GGUF backend parameters (used only when backend = "gguf").
-# Requires: pip install 'dynamic-prompt-core[gguf]'
-[model.gguf]
-n_ctx = 2048
-n_batch = 512
-n_gpu_layers = 16
-seed = 42
-verbose = false
-logits_all = true
-
-# llama_server backend parameters (used only when backend = "llama_server").
-# Connects to a llama-server instance (e.g. started by the [llm] launcher or
-# manually: llama-server -m model.gguf --n-gpu-layers 99 --port 8080).
-# No optional dependencies required — uses the core aiohttp package.
-# [model.llama_server]
-# endpoint = "http://127.0.0.1:8080"
-# timeout = 30
+# llama_server backend parameters.
+# endpoint must match the running llama-server ([llm] host:port by default).
+[model.llama_server]
+endpoint = "http://127.0.0.1:8080"
+timeout = 30
 
 # Dataset configuration for dataset.py (loader, split, artifact persistence).
 # asyncTask.py ignores this section; it only reads [llm].
@@ -206,7 +193,7 @@ output_dir = "data/results"
 # computes metrics, updates the thesis bank, selects candidates, composes a new
 # version, runs it on holdout, and decides accept/rollback. The cycle stops when
 # the cycle counter reaches this limit.
-max_cycles = 10
+max_cycles = 20
 # Number of dataset rows to process per round.
 #   0  — process all rows in the split (default).
 #   N  — process N rows in every round.
@@ -217,29 +204,14 @@ duration = 50
 # the accept/rollback decision; the holdout split is logged only.
 dev_split = "dev"
 holdout_split = "holdout"
-# Path to the active prompt-version artifact (prompt_v*_*_*.json). When empty,
-# the cycle starts from the built-in CLASSIFICATION_PROMPT_V0 baseline.
-prompt_store_path = ""
 # Start the cycle from a specific prompt: "best" or "0".
 # "best": load the newest prompt_v*_*_*.json from <output_dir>/prompt/.
 #         If the directory is empty, falls back to v0.
 # "0":   start from the built-in CLASSIFICATION_PROMPT_V0 baseline (default).
 prompt_start = "0"
-# Path to the thesis-bank artifact to seed the cycle. When empty, the cycle
-# starts with an empty thesis bank and builds it in the first round.
-thesis_bank_path = ""
-# Path to the candidate-queue artifact. When empty, the queue is filled by the
-# rule-candidate selector at the start of each round.
-candidate_queue_path = ""
-# When true, any step failure stops the cycle immediately with stop reason
-# unrecoverable_error. When false, only unrecoverable errors stop the cycle.
-stop_on_first_error = false
 # When true, the full cycle state is dumped to a JSON file after each cycle,
 # enabling resume from the last completed cycle.
 dump_state_after_each_cycle = true
-# Format for per-round reports and the final summary. Currently only "json" is
-# supported; "markdown" may be added in a future change.
-report_format = "json"
 # Directory for cycle artifacts (reports, summaries, state dumps, cycle log).
 output_dir = "data/results"
 # When true, run stage4-teacher-refinement between the baseline run and thesis
