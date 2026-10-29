@@ -40,6 +40,9 @@ class CycleState:
     cycle_number: int = 0
     cluster_index: int = 0
     any_accepted: bool = False
+    metric_history: list[dict[str, Any]] = field(default_factory=list)
+    decision_history: list[str] = field(default_factory=list)
+    rule_set_history: list[frozenset[str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-safe dict."""
@@ -49,6 +52,7 @@ class CycleState:
             "text": self.active_version.text,
             "sha256": self.active_version.sha256,
         }
+        d["rule_set_history"] = [sorted(s) for s in self.rule_set_history]
         return d
 
 
@@ -108,6 +112,9 @@ def load_state(path: str) -> CycleState:
         cycle_number=int(data.get("cycle_number", 0)),
         cluster_index=int(data.get("cluster_index", 0)),
         any_accepted=bool(data.get("any_accepted", False)),
+        metric_history=list(data.get("metric_history", [])),
+        decision_history=[str(x) for x in data.get("decision_history", [])],
+        rule_set_history=[frozenset(x) for x in data.get("rule_set_history", [])],
     )
 
 
@@ -145,9 +152,7 @@ def update_in_prompt_flags(
         entry["in_prompt"] = bool(entry.get("in_prompt", False)) or cid in accepted_cluster_ids
 
     directory = os.path.dirname(thesis_bank_path) or "."
-    tmp = os.path.join(
-        directory, f".{os.path.basename(thesis_bank_path)}.tmp.{os.getpid()}"
-    )
+    tmp = os.path.join(directory, f".{os.path.basename(thesis_bank_path)}.tmp.{os.getpid()}")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(bank, f, ensure_ascii=False, indent=2)

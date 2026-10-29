@@ -156,6 +156,23 @@ class FakeExtractor:
             ),
         )
 
+    @staticmethod
+    def skipped() -> ExtractionResult:
+        return ExtractionResult(
+            theses_raw=[],
+            theses_norm=[],
+            status="skipped",
+            latency_ms=0.0,
+            raw_extract=None,
+            call_result=CallResult(
+                parsed=None,
+                raw_content=None,
+                latency_ms=0.0,
+                parse_status=None,
+                status=ResponseStatus.SKIPPED,
+            ),
+        )
+
 
 FAKE_CANDIDATES: tuple[Candidate, ...] = (Candidate("0"), Candidate("1"))
 

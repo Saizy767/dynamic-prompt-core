@@ -172,18 +172,18 @@ formulation_temperature = 0.0
 # Directory for prompt version artifacts.
 output_dir = "data/results"
 
-# Stage 2 version comparator configuration (version_comparator.py).
-# prompt_composer.py and earlier stages ignore this section.
+# Version-comparator configuration (application/use_cases/compare_versions).
+# Only the cycle's accept/rollback decision reads this section.
 [version_comparator]
 # Primary metric for the accept/rollback decision on holdout. The new version
-# is accepted only when its value is strictly greater than the active's.
+# is accepted when its value is strictly greater than the active's; on a tie,
+# the tie-breaker metric below decides.
 # Options: macro_f1, accuracy.
 decision_metric = "macro_f1"
-# Tie-breaker metric, logged for visibility but not used in the decision.
+# Tie-breaker metric: on a primary-metric tie, accept only if this strictly
+# improves, otherwise roll back.
 # Options: minority_f1, accuracy.
 tie_breaker_metric = "minority_f1"
-# Directory for decision artifacts.
-output_dir = "data/results"
 
 # Stage 3 cycle orchestrator configuration (cycle_orchestrator.py).
 # This is the top-level entry point that drives the full optimization loop.
@@ -291,6 +291,9 @@ filter_interpretive = true
 # When true, the teacher may add theses the Tiny model missed (tagged
 # source=teacher). When false, only filtering and reformulation are done.
 allow_additions = true
+# Max concurrent in-flight teacher requests (semaphore in the refiner).
+# Conservative for CPU llama-server, mirrors [runner].concurrency.
+concurrency = 2
 # Directory for the refined theses artifact.
 output_dir = "data/results"
 # Path to the append-only refinement log (JSONL). Each operation appends one

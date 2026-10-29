@@ -21,8 +21,10 @@ cache (shared prefixes are evaluated once server-side).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import math
+import os
 from typing import Any
 
 import aiohttp
@@ -63,20 +65,22 @@ class LlamaServerCausalLMAdapter:
         timeout: int = 30,
         served_model_name: str | None = None,
         max_concurrency: int = 1,
+        gguf_path: str | None = None,
     ) -> None:
         self._endpoint = endpoint.rstrip("/")
         self._v1_completions_url = f"{self._endpoint}/v1/completions"
         self._timeout = timeout
         self._served_model_name = served_model_name
+        self._gguf_path = gguf_path
+        self._gguf_checksum: str | None = None
+        self._gguf_checksum_done = False
+        self._max_concurrency = max_concurrency
         self._session: aiohttp.ClientSession | None = None
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            connector = aiohttp.TCPConnector(
-                limit=max(1, self._semaphore._value),
-                force_close=True,
-            )
+            connector = aiohttp.TCPConnector(limit=self._max_concurrency)
             self._session = aiohttp.ClientSession(
                 connector=connector,
                 timeout=aiohttp.ClientTimeout(total=self._timeout),
@@ -268,6 +272,27 @@ class LlamaServerCausalLMAdapter:
         """Close the underlying aiohttp.ClientSession."""
         await self._safe_close_session()
 
+    def _model_checksum(self) -> str | None:
+        """sha256 of the GGUF file, computed once; None when unavailable.
+
+        The checksum is what resume identity checks compare — the endpoint
+        says nothing about which model the server loaded.
+        """
+        if not self._gguf_checksum_done:
+            self._gguf_checksum_done = True
+            if self._gguf_path and os.path.isfile(self._gguf_path):
+                try:
+                    with open(self._gguf_path, "rb") as f:
+                        self._gguf_checksum = hashlib.file_digest(
+                            f, "sha256"
+                        ).hexdigest()
+                except OSError:
+                    log.warning(
+                        "could not read gguf %s for model checksum",
+                        self._gguf_path,
+                    )
+        return self._gguf_checksum
+
     def describe(self) -> dict[str, Any]:
         """Return backend metadata for run identity and resume."""
         return {
@@ -276,6 +301,8 @@ class LlamaServerCausalLMAdapter:
             "served_model_name": self._served_model_name,
             "forcing_bias": _FORCING_BIAS,
             "timeout": self._timeout,
+            "model_path": self._gguf_path,
+            "model_checksum": self._model_checksum(),
         }
 
 

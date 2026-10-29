@@ -11,6 +11,7 @@ verbatim; per-example teacher failures never abort the run.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -144,10 +145,10 @@ async def refine_theses(
     """Run the teacher refinement use case.
 
     Loads candidates from the results artifact, calls the teacher model via
-    the port for each example, applies the refinement plan via the domain
-    service, and writes the refined' artifact. Per-example teacher failures
-    are isolated: the example keeps its original theses and processing
-    continues.
+    the port for each example (up to ``inp.concurrency`` calls in flight),
+    applies the refinement plan via the domain service, and writes the
+    refined' artifact. Per-example teacher failures are isolated: the example
+    keeps its original theses and processing continues.
     """
     rows = load_candidates(inp.results_path)
     _append_log(
@@ -163,7 +164,7 @@ async def refine_theses(
         else:
             to_process.append(row)
 
-    records: list[dict[str, Any]] = []
+    row_records: list[dict[str, Any] | None] = [None] * len(to_process)
     processed = 0
     teacher_errors = 0
     filtered = 0
@@ -173,109 +174,117 @@ async def refine_theses(
     total_completion_tokens = 0
     total_latency_ms = 0.0
 
-    for row in to_process:
+    semaphore = asyncio.Semaphore(inp.concurrency)
+
+    async def process_row(index: int, row: dict[str, Any]) -> None:
+        nonlocal processed, teacher_errors, filtered, reformulated, added
+        nonlocal total_prompt_tokens, total_completion_tokens, total_latency_ms
         example_id = row["id"]
         theses_raw_tiny: list[str] = list(row.get("theses_raw", []))
         text: str = row.get("text", "")
 
-        try:
-            review = await deps.teacher_llm_client.review_theses(text, theses_raw_tiny)
-        except Exception as exc:
-            teacher_errors += 1
-            _append_log(inp.log_path, "teacher_error", example_id, {"error": str(exc)})
-            records.append(
-                {
+        async with semaphore:
+            try:
+                review = await deps.teacher_llm_client.review_theses(text, theses_raw_tiny)
+            except Exception as exc:
+                teacher_errors += 1
+                _append_log(inp.log_path, "teacher_error", example_id, {"error": str(exc)})
+                row_records[index] = {
                     "id": example_id,
                     "theses_raw_tiny": theses_raw_tiny,
                     "theses_refined": theses_raw_tiny,
                     "filtered_out": [],
                     "added": [],
                 }
-            )
-            continue
+                return
 
-        prompt_tokens = 0
-        completion_tokens = 0
-        if review.usage:
-            prompt_tokens = int(review.usage.get("prompt_tokens", 0))
-            completion_tokens = int(review.usage.get("completion_tokens", 0))
-        total_prompt_tokens += prompt_tokens
-        total_completion_tokens += completion_tokens
-        total_latency_ms += review.latency_ms
-        _append_log(
-            inp.log_path,
-            "teacher_call",
-            example_id,
-            {
-                "latency_ms": review.latency_ms,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "status": "ok",
-            },
-        )
-
-        plan = RefinementPlanData(
-            keep=list(review.keep),
-            reformulate=[
-                ReformulatePair(from_=item["from"], to=item["to"]) for item in review.reformulate
-            ],
-            drop=[DropEntry(thesis=item["thesis"], reason=item["reason"]) for item in review.drop],
-            add=list(review.add),
-        )
-
-        theses_refined, filtered_out, added_list = apply_refinement(
-            theses_raw_tiny,
-            plan,
-            filter_noisy=inp.filter_noisy,
-            filter_interpretive=inp.filter_interpretive,
-            allow_additions=inp.allow_additions,
-        )
-
-        for item in review.reformulate:
-            from_val = item["from"]
-            to_val = item["to"]
-            kept_original = len(to_val) > len(from_val)
+            prompt_tokens = 0
+            completion_tokens = 0
+            if review.usage:
+                prompt_tokens = int(review.usage.get("prompt_tokens", 0))
+                completion_tokens = int(review.usage.get("completion_tokens", 0))
+            total_prompt_tokens += prompt_tokens
+            total_completion_tokens += completion_tokens
+            total_latency_ms += review.latency_ms
             _append_log(
                 inp.log_path,
-                "reformulate",
+                "teacher_call",
                 example_id,
                 {
-                    "from": from_val,
-                    "to": to_val,
-                    "kept_original": kept_original,
+                    "latency_ms": review.latency_ms,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "status": "ok",
                 },
             )
 
-        for drop_item in review.drop:
-            _append_log(
-                inp.log_path,
-                "filter",
-                example_id,
-                {"thesis": drop_item["thesis"], "reason": drop_item["reason"]},
+            plan = RefinementPlanData(
+                keep=list(review.keep),
+                reformulate=[
+                    ReformulatePair(from_=item["from"], to=item["to"])
+                    for item in review.reformulate
+                ],
+                drop=[
+                    DropEntry(thesis=item["thesis"], reason=item["reason"]) for item in review.drop
+                ],
+                add=list(review.add),
             )
 
-        for add_item in review.add:
-            _append_log(
-                inp.log_path,
-                "add",
-                example_id,
-                {"text": add_item, "source": "teacher"},
+            theses_refined, filtered_out, added_list = apply_refinement(
+                theses_raw_tiny,
+                plan,
+                filter_noisy=inp.filter_noisy,
+                filter_interpretive=inp.filter_interpretive,
+                allow_additions=inp.allow_additions,
             )
 
-        processed += 1
-        filtered += len(filtered_out)
-        reformulated += len(review.reformulate)
-        added += len(added_list)
+            for item in review.reformulate:
+                from_val = item["from"]
+                to_val = item["to"]
+                kept_original = len(to_val) > len(from_val)
+                _append_log(
+                    inp.log_path,
+                    "reformulate",
+                    example_id,
+                    {
+                        "from": from_val,
+                        "to": to_val,
+                        "kept_original": kept_original,
+                    },
+                )
 
-        records.append(
-            {
+            for drop_item in review.drop:
+                _append_log(
+                    inp.log_path,
+                    "filter",
+                    example_id,
+                    {"thesis": drop_item["thesis"], "reason": drop_item["reason"]},
+                )
+
+            for add_item in review.add:
+                _append_log(
+                    inp.log_path,
+                    "add",
+                    example_id,
+                    {"text": add_item, "source": "teacher"},
+                )
+
+            processed += 1
+            filtered += len(filtered_out)
+            reformulated += len(review.reformulate)
+            added += len(added_list)
+
+            row_records[index] = {
                 "id": example_id,
                 "theses_raw_tiny": theses_raw_tiny,
                 "theses_refined": theses_refined,
                 "filtered_out": filtered_out,
                 "added": added_list,
             }
-        )
+
+    await asyncio.gather(*(process_row(i, row) for i, row in enumerate(to_process)))
+
+    records = [r for r in row_records if r is not None]
 
     for row in skipped:
         records.append(
@@ -334,6 +343,6 @@ def parse_artifact_name(path: str) -> tuple[str, str]:
     """Best-effort extraction of run_id and prompt_version from a results path."""
     base = os.path.basename(path)
     parts = base.replace(".jsonl", "").split("_")
-    if len(parts) >= 4 and parts[0] == "results":
-        return parts[1], parts[2]
+    if len(parts) >= 5 and parts[0] == "results" and parts[-2] in ("dev", "holdout"):
+        return parts[1], "_".join(parts[2:-2])
     return "unknown", "unknown"

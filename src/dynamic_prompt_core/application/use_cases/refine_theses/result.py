@@ -1,4 +1,5 @@
 """Typed input and result for the refine_theses use case."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ class RefineThesesInput:
     filter_noisy: bool = True
     filter_interpretive: bool = True
     allow_additions: bool = True
+    concurrency: int = 2
 
 
 @dataclass(frozen=True)

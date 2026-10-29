@@ -1,20 +1,15 @@
 """
-Stage 1 baseline runner.
+Baseline runner for the optimization cycle.
 
 Runs the prepared dataset (dev or holdout) through the model with a fixed
 extraction prompt and the current classification prompt version, collects
 results with full schema, normalizes theses, checkpoints progress, and
-persists a jsonl results artifact for the metrics and thesis-analysis stages.
-
-Usage:
-    python runner.py --split dev
-    python runner.py --split holdout --run-id myrun
-    python runner.py --split dev --duration 1000 --cycles 3
+persists a jsonl results artifact for the metrics and thesis-analysis
+stages. Driven by the cycle via ``BaselineRunner.run``.
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import hashlib
 import json
@@ -29,7 +24,7 @@ from typing import Any
 import aiohttp
 
 from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
-from dynamic_prompt_core.application.services.metrics import metrics as metrics_module
+from dynamic_prompt_core.application.ports.outbound.extractor import Extractor
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.classification_rules import (
@@ -41,12 +36,6 @@ from dynamic_prompt_core.domain.prompts import (
     PromptArtifact,
 )
 from dynamic_prompt_core.infrastructure.data.writer import load_artifact
-from dynamic_prompt_core.infrastructure.llm import (
-    AsyncTask,
-    CallResult,
-    ResponseStatus,
-)
-from dynamic_prompt_core.infrastructure.llm.extractor import Extractor
 
 log = logging.getLogger(__name__)
 
@@ -349,17 +338,14 @@ class BaselineRunner:
         return final
 
     # -- stats -------------------------------------------------------------- #
-    def _update_stats(self, call_result: CallResult, runner_status: str) -> None:
+    def _update_stats(self, call_status: str | None, runner_status: str) -> None:
         if runner_status == _RUNNER_STATUS_OK:
             self._stats["ok"] += 1
         elif runner_status == _RUNNER_STATUS_REPAIRED:
             self._stats["repaired"] += 1
-        elif call_result.status in (
-            ResponseStatus.NETWORK_ERROR,
-            ResponseStatus.HTTP_ERROR,
-        ):
+        elif call_status in ("network_error", "http_error"):
             self._stats["network_error"] += 1
-        elif call_result.status == ResponseStatus.TIMEOUT:
+        elif call_status == "timeout":
             self._stats["timeout"] += 1
         else:
             self._stats["parse_failed"] += 1
@@ -376,9 +362,11 @@ class BaselineRunner:
         async with self._semaphore:
             # -- Classification (runs first) -- #
             classify_start = time.monotonic()
-            if not self._rules.rules:
+            if self._classify_prompt.layers is None:
+                # shortcut: malformed prompt only; empty rules go to the
+                # classifier as an honest zero-shot baseline.
                 log.info(
-                    "BaselineRunner: no classification rules for id=%s, "
+                    "BaselineRunner: malformed prompt (layers is None) for id=%s, "
                     "setting predicted_decision=0 without classifier call",
                     example.id,
                 )
@@ -421,12 +409,12 @@ class BaselineRunner:
 
             # -- Extraction (runs after classification) -- #
             if self._skip_extraction:
-                extract_result = Extractor.skipped()
+                extract_result = self._extractor.skipped()
             else:
                 extract_result = await self._extractor.extract(
                     session, example.text, true_val=example.label,
                 )
-                self._update_stats(extract_result.call_result, extract_result.status)
+                self._update_stats(extract_result.call_status, extract_result.status)
 
             row = ResultRow(
                 id=example.id,
@@ -526,116 +514,3 @@ class BaselineRunner:
         print(f"Request log: {self._request_log_path()}")
 
         return [r for r in results if r is not None], artifact_path
-
-
-# --------------------------------------------------------------------------- #
-#  CLI
-# --------------------------------------------------------------------------- #
-async def _main_async(args: argparse.Namespace) -> None:
-    config = RunnerConfig.from_config(args.config)
-
-
-    run_id = args.run_id
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    if not run_id:
-        run_id = f"run-{timestamp}"
-
-    output_dir = config.output_dir
-    os.makedirs(output_dir, exist_ok=True)
-
-    with open(args.config, "rb") as f:
-        raw_config = tomllib.load(f)
-
-    from dynamic_prompt_core.infrastructure.llm.classifier_factory import (
-        build_classifier,
-    )
-    from dynamic_prompt_core.infrastructure.llm.extractor import Extractor
-    from dynamic_prompt_core.infrastructure.llm.scoring.config import (
-        scorer_backend_config_from_toml,
-    )
-
-    candidates = [Candidate(v) for v in config.candidates]
-    classifier = build_classifier(
-        scorer_backend_config_from_toml(raw_config),
-        candidates,
-    )
-
-    cycles = args.cycles
-    for cycle in range(1, cycles + 1):
-        cycle_run_id = run_id if cycles == 1 else f"{run_id}-c{cycle}"
-        if cycles > 1:
-            print(f"\n{'=' * 60}")
-            print(f"Cycle {cycle}/{cycles}  (run_id={cycle_run_id})")
-            print(f"{'=' * 60}")
-
-        log_path = os.path.join(output_dir, f"requests_{cycle_run_id}_{args.split}.jsonl")
-
-        task = AsyncTask(
-            config_path=args.config,
-            endpoint=args.endpoint,
-            log_path=log_path,
-            run_id=cycle_run_id,
-        )
-        extractor = Extractor(task=task, language=config.language)
-
-        runner = BaselineRunner(
-            classifier=classifier,
-            extractor=extractor,
-            config=config,
-            split=args.split,
-            candidates=candidates,
-            run_id=cycle_run_id,
-            dataset_artifact=args.dataset_artifact,
-            duration=args.duration,
-        )
-
-        _, artifact_path = await runner.run()
-
-        # Auto-compute metrics from the cycle's results artifact
-        try:
-            rows = metrics_module.load_results(artifact_path)
-            m_config = metrics_module.MetricsConfig.from_config(args.config)
-            m = metrics_module.compute_metrics(rows, m_config, artifact_path)
-            metrics_path = metrics_module.write_metrics(m, m_config.output_dir)
-            print(f"\nMetrics artifact: {metrics_path}")
-            print(
-                f"  accuracy={m['accuracy']:.4f}  macro-F1={m['f1']['macro']:.4f}"
-                f"  minority-F1={m['f1']['minority']:.4f}  biased={m['bias']['biased']}"
-            )
-        except Exception as exc:
-            log.warning("Metrics computation failed for %s: %s", artifact_path, exc)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Stage 1 baseline runner")
-    parser.add_argument("--split", choices=["dev", "holdout"], required=True)
-    parser.add_argument("--run-id", default=None, help="Run identifier (for resume)")
-    parser.add_argument(
-        "--dataset-artifact",
-        default=None,
-        help="Path to the prepared dataset artifact (jsonl/parquet)",
-    )
-    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
-    parser.add_argument(
-        "--endpoint",
-        default="http://127.0.0.1:8080/v1",
-        help="LLM server endpoint",
-    )
-    parser.add_argument(
-        "--duration",
-        type=int,
-        default=None,
-        help="Number of examples from the split to process (must be <= split size)",
-    )
-    parser.add_argument(
-        "--cycles",
-        type=int,
-        default=1,
-        help="Number of passes over the selected examples (each cycle gets its own artifact)",
-    )
-    args = parser.parse_args()
-    asyncio.run(_main_async(args))
-
-
-if __name__ == "__main__":
-    main()

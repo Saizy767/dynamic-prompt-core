@@ -1,15 +1,15 @@
 """Composition-root factory for the classifier.
 
 Constructs an ``LLMLogitClassifier`` with all infrastructure dependencies
-from a ``ScorerBackendConfig``.  Callers receive the result through the
-``Classifier`` port.
+from a ``ScorerBackendConfig``.  The result structurally satisfies the
+``Classifier`` port; callers consume it through the port.
 """
 from __future__ import annotations
 
 import logging
 
-from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
 from dynamic_prompt_core.domain.models.candidate import Candidate
+from dynamic_prompt_core.infrastructure.llm.classifier import LLMLogitClassifier
 from dynamic_prompt_core.infrastructure.llm.scoring.config import ScorerBackendConfig
 
 log = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 def build_classifier(
     config: ScorerBackendConfig,
     candidates: list[Candidate],
-) -> Classifier:
+) -> LLMLogitClassifier:
     """Construct a ``Classifier`` backed by LLM logits.
 
     Dispatches on ``config.backend``: the sole backend is ``"llama_server"``
@@ -26,7 +26,6 @@ def build_classifier(
     ``LLMLogitClassifier`` with the shared ``ClassifierPromptBuilder`` (loaded
     from the classifier system-prompt resource) and ``LogitScorer``.
     """
-    from dynamic_prompt_core.infrastructure.llm.classifier import LLMLogitClassifier
     from dynamic_prompt_core.infrastructure.llm.prompts import load_prompt
     from dynamic_prompt_core.infrastructure.llm.scoring.classifier_prompt_builder import (
         ClassifierPromptBuilder,
@@ -75,6 +74,8 @@ def _build_llama_server_adapters(config: ScorerBackendConfig) -> tuple[object, o
         endpoint=ls.endpoint,
         timeout=ls.timeout,
         served_model_name=None,
+        gguf_path=ls.gguf_path,
+        max_concurrency=ls.max_concurrency,
     )
     tokenizer_adapter = LlamaServerBatchTokenizerAdapter(
         endpoint=ls.endpoint,

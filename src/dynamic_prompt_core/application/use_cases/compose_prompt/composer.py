@@ -1,23 +1,16 @@
 """
-Stage 3 prompt composer.
+Prompt composition for the optimization cycle.
 
-Loads a rule-candidate artifact, formulates each candidate into a single-sentence
-rule via an LLM, verifies semantic fidelity against the source cluster centroid,
-assembles a new classification prompt version from the unchanged base layers plus
-accepted rules, validates hard limits, and persists a reloadable prompt-version
-artifact with full lineage back to source clusters.
-
-Usage:
-    python prompt_composer.py --artifact data/results/rule_candidates_*.json
-    python prompt_composer.py --artifact data/results/rule_candidates_*.json \
-        --thesis-artifact data/results/thesis_bank_*.json \
-        --config config.toml --endpoint http://127.0.0.1:8080/v1
+Takes rule candidates, formulates each into a single-sentence rule via an
+LLM, verifies semantic fidelity against the source cluster centroid,
+assembles a new classification prompt version from the unchanged base layers
+plus accepted rules, validates hard limits, and persists a prompt-version
+artifact with full lineage back to source clusters. Driven by the cycle via
+``compose``.
 """
 
 from __future__ import annotations
 
-import argparse
-import asyncio
 import hashlib
 import itertools
 import json
@@ -29,6 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
+import aiohttp
 import numpy as np
 
 from dynamic_prompt_core.application.schemas import RuleFormulation
@@ -58,17 +52,6 @@ DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_FORMULATION_MAX_TOKENS = 64
 DEFAULT_FORMULATION_TEMPERATURE = 0.0
 DEFAULT_EMBEDDING_DEVICE = "auto"
-DEFAULT_ENDPOINT = "http://127.0.0.1:8080/v1"
-
-REQUIRED_CANDIDATE_FIELDS = (
-    "cluster_id",
-    "representative_theses",
-    "precision",
-    "frequency",
-    "positive_hits",
-    "negative_hits",
-    "rank",
-)
 
 REQUIRED_BASE_LAYERS = ("role", "task", "output_contract", "fallback")
 
@@ -128,34 +111,6 @@ class PromptComposerConfig:
 # --------------------------------------------------------------------------- #
 #  Artifact loading and validation
 # --------------------------------------------------------------------------- #
-def _validate_candidate(candidate: dict[str, Any]) -> None:
-    cid = candidate.get("cluster_id")
-    for fname in REQUIRED_CANDIDATE_FIELDS:
-        if fname not in candidate or candidate[fname] is None:
-            raise PromptComposerError(
-                f"candidate cluster_id={cid!r} is missing required field '{fname}'"
-            )
-
-
-def load_candidates(path: str) -> dict[str, Any]:
-    """Load and schema-validate a rule-candidate artifact (JSON with candidates).
-
-    Returns a dict with 'metadata' and 'candidates' keys.
-    Raises PromptComposerError naming the first offending candidate's cluster_id
-    and the missing field when a candidate does not conform.
-    """
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-
-    if "candidates" not in data:
-        raise PromptComposerError("artifact is missing top-level 'candidates' key")
-
-    for candidate in data["candidates"]:
-        _validate_candidate(candidate)
-
-    return cast(dict[str, Any], data)
-
-
 def load_base_layers(
     prompt_artifact: PromptArtifact,
 ) -> dict[str, str]:
@@ -247,25 +202,22 @@ async def formulate_rule(
     candidate: dict[str, Any],
     config: PromptComposerConfig,
     async_task: Any,
+    session: aiohttp.ClientSession,
 ) -> str | None:
     """Formulate a single-sentence rule from a candidate via an LLM call.
 
     Returns the rule string, or None when the LLM call fails or returns no
     parseable result.
     """
-    import aiohttp
-
     user_message = _build_user_message(candidate)
-    connector = aiohttp.TCPConnector(limit=1)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        result = await async_task.analyze(
-            session,
-            user_message,
-            RuleFormulation,
-            call_type="formulate_rule",
-            system_prompt=_FORMULATION_PROMPT,
-            max_tokens=config.formulation_max_tokens,
-        )
+    result = await async_task.analyze(
+        session,
+        user_message,
+        RuleFormulation,
+        call_type="formulate_rule",
+        system_prompt=_FORMULATION_PROMPT,
+        max_tokens=config.formulation_max_tokens,
+    )
     if result is None:
         return None
     return cast(str, result.rule)
@@ -276,29 +228,26 @@ async def reformulate_rule(
     previous_rule: str,
     config: PromptComposerConfig,
     async_task: Any,
+    session: aiohttp.ClientSession,
 ) -> str | None:
     """Reformulate a rule that failed the distortion check.
 
     Appends a faithfulness instruction referencing the previous rule and makes
     a second LLM call. Returns the new rule string, or None on failure.
     """
-    import aiohttp
-
     user_message = (
         _build_user_message(candidate)
         + f'\n\nPrevious rule: "{previous_rule}"'
         + _REFORMULATION_INSTRUCTION
     )
-    connector = aiohttp.TCPConnector(limit=1)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        result = await async_task.analyze(
-            session,
-            user_message,
-            RuleFormulation,
-            call_type="reformulate_rule",
-            system_prompt=_FORMULATION_PROMPT,
-            max_tokens=config.formulation_max_tokens,
-        )
+    result = await async_task.analyze(
+        session,
+        user_message,
+        RuleFormulation,
+        call_type="reformulate_rule",
+        system_prompt=_FORMULATION_PROMPT,
+        max_tokens=config.formulation_max_tokens,
+    )
     if result is None:
         return None
     return cast(str, result.rule)
@@ -513,70 +462,75 @@ async def compose(
     rules_with_lineage: list[dict[str, Any]] = []
     rejected_rules: list[dict[str, Any]] = []
 
-    for candidate in candidates:
-        cluster_id = candidate["cluster_id"]
+    async with aiohttp.ClientSession() as session:
+        for candidate in candidates:
+            cluster_id = candidate["cluster_id"]
 
-        rule = await formulate_rule(candidate, config, async_task)
-        if rule is None or rule.strip() == "":
-            log.warning(
-                "formulation returned empty rule for cluster_id=%s; skipping",
-                cluster_id,
-            )
-            rejected_distortion += 1
-            rejected_rules.append(
-                {
-                    "cluster_id": cluster_id,
-                    "text": None,
-                    "cosine": None,
-                    "threshold": config.distortion_threshold,
-                    "reason": "empty_formulation",
-                }
-            )
-            continue
-        rules_formulated += 1
-
-        rule, was_truncated = enforce_rule_length(rule, config.max_rule_words)
-
-        centroid = centroids.get(cluster_id)
-        passed, similarity = check_distortion(
-            rule, centroid, config, config.embedding_model, config.embedding_device
-        )
-
-        if not passed and config.allow_reformulation:
-            log.info(
-                "attempting reformulation for cluster_id=%s (similarity=%.4f)",
-                cluster_id,
-                similarity if similarity is not None else 0.0,
-            )
-            new_rule = await reformulate_rule(candidate, rule, config, async_task)
-            if new_rule is not None and new_rule.strip() != "":
-                new_rule, _ = enforce_rule_length(new_rule, config.max_rule_words)
-                passed, similarity = check_distortion(
-                    new_rule, centroid, config, config.embedding_model, config.embedding_device
+            rule = await formulate_rule(candidate, config, async_task, session)
+            if rule is None or rule.strip() == "":
+                log.warning(
+                    "formulation returned empty rule for cluster_id=%s; skipping",
+                    cluster_id,
                 )
-                if passed:
-                    rule = new_rule
+                rejected_distortion += 1
+                rejected_rules.append(
+                    {
+                        "cluster_id": cluster_id,
+                        "text": None,
+                        "cosine": None,
+                        "threshold": config.distortion_threshold,
+                        "reason": "empty_formulation",
+                    }
+                )
+                continue
+            rules_formulated += 1
 
-        if not passed:
-            log.warning(
-                "rule rejected for distortion: cluster_id=%s similarity=%.4f",
-                cluster_id,
-                similarity if similarity is not None else 0.0,
-            )
-            rejected_distortion += 1
-            rejected_rules.append(
-                {
-                    "cluster_id": cluster_id,
-                    "text": rule,
-                    "cosine": similarity,
-                    "threshold": config.distortion_threshold,
-                    "reason": "distortion",
-                }
-            )
-            continue
+            rule, was_truncated = enforce_rule_length(rule, config.max_rule_words)
 
-        accepted_rules.append(rule)
-        rules_with_lineage.append({"cluster_id": cluster_id, "text": rule})
+            centroid = centroids.get(cluster_id)
+            passed, similarity = check_distortion(
+                rule, centroid, config, config.embedding_model, config.embedding_device
+            )
+
+            if not passed and config.allow_reformulation:
+                log.info(
+                    "attempting reformulation for cluster_id=%s (similarity=%.4f)",
+                    cluster_id,
+                    similarity if similarity is not None else 0.0,
+                )
+                new_rule = await reformulate_rule(candidate, rule, config, async_task, session)
+                if new_rule is not None and new_rule.strip() != "":
+                    new_rule, _ = enforce_rule_length(new_rule, config.max_rule_words)
+                    passed, similarity = check_distortion(
+                        new_rule,
+                        centroid,
+                        config,
+                        config.embedding_model,
+                        config.embedding_device,
+                    )
+                    if passed:
+                        rule = new_rule
+
+            if not passed:
+                log.warning(
+                    "rule rejected for distortion: cluster_id=%s similarity=%.4f",
+                    cluster_id,
+                    similarity if similarity is not None else 0.0,
+                )
+                rejected_distortion += 1
+                rejected_rules.append(
+                    {
+                        "cluster_id": cluster_id,
+                        "text": rule,
+                        "cosine": similarity,
+                        "threshold": config.distortion_threshold,
+                        "reason": "distortion",
+                    }
+                )
+                continue
+
+            accepted_rules.append(rule)
+            rules_with_lineage.append({"cluster_id": cluster_id, "text": rule})
 
     all_rules = list(existing_rules or []) + accepted_rules
     prompt_artifact = assemble_prompt(base_layers, all_rules, base_version, version_str=version_str)
@@ -611,12 +565,12 @@ def write_prompt_version(
 ) -> str:
     """Serialize the new prompt version to a JSON artifact.
 
-    Filename: prompt/prompt_v{version}_{run_id}_{timestamp}.json
+    Filename: prompt/prompt_{version}_{run_id}_{timestamp}.json
     """
     output_dir = os.path.join(output_dir, "prompt")
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     version = prompt_artifact.version
-    name = f"prompt_v{version}_{run_id}_{timestamp}.json"
+    name = f"prompt_{version}_{run_id}_{timestamp}.json"
     path = os.path.join(output_dir, name)
 
     dump = {
@@ -663,140 +617,3 @@ def load_prompt_version(path: str) -> dict[str, Any]:
         meta["rejected_rules"] = []
         data["metadata"] = meta
     return cast(dict[str, Any], data)
-
-
-# --------------------------------------------------------------------------- #
-#  CLI
-# --------------------------------------------------------------------------- #
-def _print_summary(
-    prompt_artifact: PromptArtifact,
-    counters: dict[str, int],
-    run_id: str,
-    base_version: str,
-) -> None:
-    print("\n" + "=" * 60)
-    print(
-        f"Prompt version  (version={prompt_artifact.version}, base={base_version}, run_id={run_id})"
-    )
-    print("=" * 60)
-    print(
-        f"  candidates_in      : {counters['candidates_in']}\n"
-        f"  rules_formulated   : {counters['rules_formulated']}\n"
-        f"  rejected_distortion : {counters['rejected_distortion']}\n"
-        f"  rejected_limits    : {counters['rejected_limits']}\n"
-        f"  final_rules_count  : {counters['final_rules_count']}"
-    )
-    print("-" * 60)
-    print(f"  hash: {prompt_artifact.sha256}")
-    print(f"  tokens (words): {len(prompt_artifact.text.split())}")
-    print("=" * 60)
-
-
-async def _run_composition(
-    candidates: list[dict[str, Any]],
-    base_layers: dict[str, str],
-    centroids: dict[int, np.ndarray],
-    config: PromptComposerConfig,
-    base_version: str,
-    endpoint: str,
-    config_path: str,
-) -> tuple[PromptArtifact, list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
-    """Create an AsyncTask and run the composition pipeline."""
-    from dynamic_prompt_core.infrastructure.llm import AsyncTask
-
-    async_task = AsyncTask(
-        config_path=config_path,
-        endpoint=endpoint,
-        max_tokens=config.formulation_max_tokens,
-        temperature=config.formulation_temperature,
-    )
-    return await compose(candidates, base_layers, centroids, config, async_task, base_version)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Stage 3 prompt composer")
-    parser.add_argument(
-        "--artifact",
-        required=True,
-        help="Path to rule-candidate artifact (JSON with candidates)",
-    )
-    parser.add_argument(
-        "--thesis-artifact",
-        default=None,
-        help="Path to thesis-bank dump (JSON with cluster centroids)",
-    )
-    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
-    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
-    args = parser.parse_args()
-
-
-    from dynamic_prompt_core.domain.prompts import CLASSIFICATION_PROMPT_V0
-
-    config = PromptComposerConfig.from_config(args.config)
-    candidate_artifact = load_candidates(args.artifact)
-    run_id = candidate_artifact.get("metadata", {}).get("run_id", "unknown")
-
-    base_layers = load_base_layers(CLASSIFICATION_PROMPT_V0)
-    base_version = CLASSIFICATION_PROMPT_V0.version
-
-    centroids = load_centroids(args.thesis_artifact)
-
-    candidates = candidate_artifact["candidates"]
-
-    prompt_artifact, rules_with_lineage, counters, rejected_rules = asyncio.run(
-        _run_composition(
-            candidates,
-            base_layers,
-            centroids,
-            config,
-            base_version,
-            args.endpoint,
-            args.config,
-        )
-    )
-
-    tokenizer = None
-    try:
-        from dynamic_prompt_core.infrastructure.llm import AsyncTask
-
-        async_task = AsyncTask(config_path=args.config, endpoint=args.endpoint)
-        tokenizer = async_task._tokenizer
-    except Exception:
-        pass
-
-    try:
-        validate_limits(prompt_artifact, config, tokenizer)
-    except PromptComposerError as exc:
-        counters["rejected_limits"] = 1
-        log.error("limit validation failed: %s", exc)
-        raise
-
-    source_candidates = [r["cluster_id"] for r in rules_with_lineage]
-
-    log.info(
-        "composition: candidates_in=%d rules_formulated=%d "
-        "rejected_distortion=%d rejected_limits=%d final_rules_count=%d",
-        counters["candidates_in"],
-        counters["rules_formulated"],
-        counters["rejected_distortion"],
-        counters["rejected_limits"],
-        counters["final_rules_count"],
-    )
-
-    artifact_path = write_prompt_version(
-        prompt_artifact,
-        rules_with_lineage,
-        source_candidates,
-        base_version,
-        run_id,
-        counters,
-        config,
-        config.output_dir,
-        rejected_rules,
-    )
-    _print_summary(prompt_artifact, counters, run_id, base_version)
-    print(f"Prompt version: {artifact_path}")
-
-
-if __name__ == "__main__":
-    main()

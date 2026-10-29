@@ -303,7 +303,35 @@ class TestLifecycle:
             "served_model_name",
             "forcing_bias",
             "timeout",
+            "model_path",
+            "model_checksum",
         }
+
+    async def test_describe_checksums_gguf_file(self, tmp_path) -> None:
+        """describe() must identify the model file, not just the endpoint."""
+        import hashlib
+
+        gguf = tmp_path / "model.gguf"
+        gguf.write_bytes(b"model-bytes")
+        adapter = LlamaServerCausalLMAdapter(
+            endpoint="http://127.0.0.1:8080",
+            timeout=5,
+            gguf_path=str(gguf),
+        )
+        meta = adapter.describe()
+        expected = hashlib.sha256(b"model-bytes").hexdigest()
+        assert meta["model_path"] == str(gguf)
+        assert meta["model_checksum"] == expected
+        assert adapter.describe()["model_checksum"] == expected
+
+    async def test_describe_missing_gguf_gives_none_checksum(self, tmp_path) -> None:
+        adapter = LlamaServerCausalLMAdapter(
+            endpoint="http://127.0.0.1:8080",
+            timeout=5,
+            gguf_path=str(tmp_path / "absent.gguf"),
+        )
+        meta = adapter.describe()
+        assert meta["model_checksum"] is None
 
     async def test_aclose_closes_session(self) -> None:
         adapter, session = _make_adapter([])

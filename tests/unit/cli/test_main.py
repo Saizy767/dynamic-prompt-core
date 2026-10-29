@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
+import tomllib
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
     RunCycleResult,
@@ -78,9 +83,7 @@ def test_cycle_flags_override_config(tmp_path):
         _CONFIG.replace("max_cycles = 10", "max_cycles = 3\nduration = [10, 20, 30]"),
     )
 
-    run = _run_main(
-        ["--config", config_path, "cycle", "--cycles", "5", "--split", "holdout"]
-    )
+    run = _run_main(["--config", config_path, "cycle", "--cycles", "5", "--split", "holdout"])
 
     config = _received_config(run)
     assert config.max_cycles == 5
@@ -99,3 +102,63 @@ def test_parse_args_cycle_flags_default_to_none():
     args = parse_args(["cycle", "--cycles", "7", "--split", "holdout"])
     assert args.cycles == 7
     assert args.split == "holdout"
+
+
+def test_parse_args_rejects_underscore_run_id():
+    """run_id feeds '_'-delimited artifact names; underscores would break parsing."""
+    from dynamic_prompt_core.interfaces.cli.main import parse_args
+
+    with pytest.raises(SystemExit) as exc:
+        parse_args(["refine", "--results", "x.jsonl", "--run-id", "bad_id"])
+    assert exc.value.code == 2
+
+
+@contextlib.contextmanager
+def _lightweight_deps():
+    """Patch every heavy constructor build_cli_deps wires, except the teacher block."""
+    with (
+        patch("dynamic_prompt_core.infrastructure.llm.AsyncTask"),
+        patch("dynamic_prompt_core.infrastructure.storage.PromptStoreConfig"),
+        patch("dynamic_prompt_core.infrastructure.storage.init_store"),
+        patch("dynamic_prompt_core.infrastructure.storage.run_repository.FileRunRepository"),
+        patch("dynamic_prompt_core.infrastructure.llm.classifier_factory.build_classifier"),
+        patch("dynamic_prompt_core.infrastructure.llm.extractor.Extractor"),
+        patch(
+            "dynamic_prompt_core.infrastructure.llm.scoring.config.scorer_backend_config_from_toml"
+        ),
+        patch("dynamic_prompt_core.application.use_cases.run_baseline.runner.RunnerConfig"),
+    ):
+        yield
+
+
+def test_build_cli_deps_teacher_config_typo_propagates(tmp_path):
+    """Regression: a teacher config typo must raise, not silently disable refinement."""
+    from dynamic_prompt_core.interfaces.cli.main import build_cli_deps
+
+    body = _CONFIG + '\n[teacher]\nendpoint = "http://t"\nmodel_name = "m"\ntimeout = "sixty"\n'
+    config_path = _write_config(tmp_path, body)
+
+    with _lightweight_deps():
+        with pytest.raises(ValueError):
+            build_cli_deps(tomllib.loads(body), config_path)
+
+
+def test_build_cli_deps_teacher_build_failure_warns(tmp_path, caplog):
+    """Non-config teacher failures disable refinement with a WARNING, not debug."""
+    from dynamic_prompt_core.interfaces.cli.main import build_cli_deps
+
+    body = _CONFIG + '\n[teacher]\nendpoint = "http://t"\nmodel_name = "m"\n'
+    config_path = _write_config(tmp_path, body)
+
+    with (
+        _lightweight_deps(),
+        patch(
+            "dynamic_prompt_core.infrastructure.llm.teacher_client.TeacherClient",
+            side_effect=RuntimeError("boom"),
+        ),
+    ):
+        with caplog.at_level(logging.WARNING, logger=MAIN):
+            deps = build_cli_deps(tomllib.loads(body), config_path)
+
+    assert deps.teacher_llm_client is None
+    assert any("refinement disabled" in r.getMessage() for r in caplog.records)

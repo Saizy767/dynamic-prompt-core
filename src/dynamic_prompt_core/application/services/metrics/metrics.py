@@ -42,7 +42,7 @@ REQUIRED_FIELDS = (
 )
 
 _ARTIFACT_NAME_RE = re.compile(
-    r"^results_(?P<run_id>.+)_(?P<prompt_version>.+)_(?P<split>dev|holdout)_(?P<timestamp>[^.]+)\.jsonl$"
+    r"^results_(?P<run_id>[^_]+)_(?P<prompt_version>.+)_(?P<split>dev|holdout)_(?P<timestamp>[^.]+)\.jsonl$"
 )
 
 
@@ -540,12 +540,6 @@ def write_metrics(metrics_dict: dict[str, Any], output_dir: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(metrics_dict, f, ensure_ascii=False, indent=2)
     return path
-
-
-def load_metrics(path: str) -> dict[str, Any]:
-    """Load a metrics json artifact."""
-    with open(path, encoding="utf-8") as f:
-        return cast(dict[str, Any], json.load(f))
 
 
 # --------------------------------------------------------------------------- #

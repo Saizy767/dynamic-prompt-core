@@ -146,3 +146,22 @@ def test_resume_from_dumped_state_preserves_fields(tmp_path, mock_run_repository
     assert loaded.thesis_bank_path == "bank.json"
     assert loaded.clusters_path == "clusters.json"
     assert loaded.candidate_queue == [{"cluster_id": 7}]
+
+
+def test_histories_survive_dump_load_roundtrip(tmp_path, mock_run_repository):
+    """metric/decision/rule_set histories survive a dump-load roundtrip.
+
+    Resume must not reset stop-criteria inputs (rollback streak, plateau,
+    stagnation) to zero.
+    """
+    state = CycleState(cycle_counter=3, run_id="hist-run")
+    state.metric_history = [{"accuracy": 0.5}, {"accuracy": 0.6}]
+    state.decision_history = ["rollback", "rollback", "rollback"]
+    state.rule_set_history = [frozenset({"r1"}), frozenset({"r1", "r2"})]
+
+    path = dump_state(state, mock_run_repository, str(tmp_path))
+    loaded = load_state(path)
+
+    assert loaded.metric_history == [{"accuracy": 0.5}, {"accuracy": 0.6}]
+    assert loaded.decision_history == ["rollback", "rollback", "rollback"]
+    assert loaded.rule_set_history == [frozenset({"r1"}), frozenset({"r1", "r2"})]

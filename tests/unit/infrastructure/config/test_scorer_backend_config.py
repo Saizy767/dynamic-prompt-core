@@ -1,4 +1,5 @@
 """Unit tests for scorer backend configuration (single llama_server backend)."""
+
 from __future__ import annotations
 
 import pytest
@@ -88,3 +89,52 @@ class TestScorerBackendConfigFromToml:
     def test_unknown_backend_in_toml_raises(self) -> None:
         with pytest.raises(ConfigError, match="Invalid scorer backend"):
             scorer_backend_config_from_toml({"model": {"backend": "unknown"}})
+
+    def test_gguf_path_taken_from_llm_section(self) -> None:
+        raw = {
+            "llm": {"gguf_path": "model/qwen.gguf"},
+            "model": {
+                "backend": "llama_server",
+                "llama_server": {"endpoint": "http://10.0.0.1:7070"},
+            },
+        }
+        cfg = scorer_backend_config_from_toml(raw)
+        assert cfg.llama_server is not None
+        assert cfg.llama_server.gguf_path == "model/qwen.gguf"
+
+    def test_gguf_path_defaults_without_llm_section(self) -> None:
+        cfg = scorer_backend_config_from_toml(
+            {"model": {"backend": "llama_server", "llama_server": {}}}
+        )
+        assert cfg.llama_server is not None
+        assert cfg.llama_server.gguf_path is None
+
+    def test_max_concurrency_follows_runner_concurrency(self) -> None:
+        cfg = scorer_backend_config_from_toml({"runner": {"concurrency": 4}})
+        assert cfg.llama_server is not None
+        assert cfg.llama_server.max_concurrency == 4
+
+    def test_max_concurrency_override_beats_runner(self) -> None:
+        cfg = scorer_backend_config_from_toml(
+            {
+                "runner": {"concurrency": 4},
+                "model": {
+                    "backend": "llama_server",
+                    "llama_server": {"max_concurrency": 8},
+                },
+            }
+        )
+        assert cfg.llama_server is not None
+        assert cfg.llama_server.max_concurrency == 8
+
+    def test_max_concurrency_defaults_to_two(self) -> None:
+        cfg = scorer_backend_config_from_toml({})
+        assert cfg.llama_server is not None
+        assert cfg.llama_server.max_concurrency == 2
+
+    def test_invalid_max_concurrency_raises(self) -> None:
+        with pytest.raises(ConfigError, match="invalid max_concurrency"):
+            ScorerBackendConfig(
+                backend="llama_server",
+                llama_server=LlamaServerParams(max_concurrency=0),
+            )

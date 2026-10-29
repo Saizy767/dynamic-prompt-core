@@ -52,7 +52,7 @@ class LlamaServerBatchTokenizerAdapter:
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            connector = aiohttp.TCPConnector(limit=4, force_close=True)
+            connector = aiohttp.TCPConnector(limit=4)
             self._session = aiohttp.ClientSession(
                 connector=connector,
                 timeout=aiohttp.ClientTimeout(total=self._timeout),

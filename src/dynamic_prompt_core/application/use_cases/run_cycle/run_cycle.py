@@ -30,6 +30,8 @@ from dynamic_prompt_core.application.use_cases.run_cycle.state import (
 )
 from dynamic_prompt_core.application.use_cases.run_cycle.steps import (
     _extract_metric_summary,
+    compute_dev_metrics,
+    run_active_on_dev,
     run_cycle_step,
 )
 from dynamic_prompt_core.domain.prompts.base import parse_prompt_layers
@@ -86,17 +88,21 @@ def _load_best_prompt(
     """Load the best prompt artifact from a directory.
 
     Scans ``prompt_dir`` for ``prompt_v*_*_*.json`` files and picks the
-    newest by filename sort order.  Falls back to ``CLASSIFICATION_PROMPT_V0``
-    when the directory is empty or does not exist.
+    newest by version number (lexicographic sort would put v10 before v2).
+    Falls back to ``CLASSIFICATION_PROMPT_V0`` when the directory is empty
+    or does not exist.
     """
     import glob as globlib
 
     from dynamic_prompt_core.application.use_cases.compose_prompt.composer import (
         load_prompt_version,
     )
+    from dynamic_prompt_core.application.use_cases.observe_cycle.observer import (
+        _sort_prompt_version_paths,
+    )
 
     pattern = os.path.join(prompt_dir, "prompt_v*_*_*.json")
-    candidates = sorted(globlib.glob(pattern))
+    candidates = _sort_prompt_version_paths(globlib.glob(pattern))
     if not candidates:
         log.info(
             "prompt_start=best but no prompt artifact in %s; using v0",
@@ -127,6 +133,7 @@ def load_initial_state(
     deps: RunCycleDeps,
     config: CycleConfig,
     config_path: str,
+    run_id: str,
 ) -> CycleState:
     """Load the initial cycle state.
 
@@ -134,8 +141,6 @@ def load_initial_state(
     active version exists).  Raises ``CycleOrchestratorError`` when a
     required artifact is missing.
     """
-    run_id = config.run_id or f"cycle-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
-
     active_version = CLASSIFICATION_PROMPT_V0
     active_version_path = ""
 
@@ -176,9 +181,7 @@ def load_initial_state(
 
     if dataset_artifact:
         if not os.path.exists(dataset_artifact):
-            raise CycleOrchestratorError(
-                f"dataset artifact not found at {dataset_artifact!r}"
-            )
+            raise CycleOrchestratorError(f"dataset artifact not found at {dataset_artifact!r}")
     else:
         raise CycleOrchestratorError(
             "dataset artifact path is required (config [runner].dataset_artifact)"
@@ -202,12 +205,11 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
 
     output_dir = config.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    log_path = os.path.join(
-        output_dir,
-        "log_cycle",
-        f"cycle_log_{config.run_id or 'default'}_{ts}.jsonl",
-    )
+    run_id = config.run_id or f"cycle-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    # Artifact-name parsers (metrics, refiner, observer) split on "_".
+    if "_" in run_id:
+        raise ValueError(f"run_id must not contain '_': {run_id!r}")
+    log_path = os.path.join(output_dir, "log_cycle", f"cycle_log_{run_id}.jsonl")
 
     stop_reason = "unrecoverable_error"
 
@@ -216,7 +218,7 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
             state = load_state(run_input.resume_from)
             log.info("resuming from cycle %d", state.cycle_counter)
         else:
-            state = load_initial_state(deps, config, run_input.config_path)
+            state = load_initial_state(deps, config, run_input.config_path, run_id)
 
         log_event(
             "cycle_start",
@@ -224,10 +226,6 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
             {"run_id": state.run_id, "max_cycles": config.max_cycles},
             log_path,
         )
-
-        metric_history: list[dict[str, float]] = []
-        decision_history: list[str] = []
-        rule_set_history: list[frozenset[str]] = []
 
         while True:
             should_stop, reason = check_stop(state, config)
@@ -251,12 +249,11 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
                     metrics_dev = report.get("metrics_dev_new") or report.get(
                         "metrics_dev_active", {}
                     )
-                    metric_history.append(_extract_metric_summary(metrics_dev))
-                    decision_history.append(str(report.get("decision", "rollback")))
+                    state.metric_history.append(_extract_metric_summary(metrics_dev))
+                    state.decision_history.append(str(report.get("decision", "rollback")))
                 except Exception as exc:
                     log.debug("could not load report for history: %s", exc)
-            rule_set_history.append(_extract_rule_set(state))
-
+            state.rule_set_history.append(_extract_rule_set(state))
             if deps.stop_criteria_deps is not None:
                 from dynamic_prompt_core.application.ports.outbound.stop_criteria import (
                     StopEvaluationContext,
@@ -268,15 +265,13 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
                 stop_config = config.stop_criteria_config
                 ctx = StopEvaluationContext(
                     round_counter=state.cycle_counter,
-                    rollback_counter=_consecutive_rollbacks(decision_history),
-                    max_consecutive_rollbacks=getattr(
-                        stop_config, "max_consecutive_rollbacks", 2
-                    ),
+                    rollback_counter=_consecutive_rollbacks(state.decision_history),
+                    max_consecutive_rollbacks=getattr(stop_config, "max_consecutive_rollbacks", 2),
                     candidate_queue_size=len(state.candidate_queue),
                     new_candidates_found=state.last_cycle_new_candidates,
-                    metric_history=list(metric_history),
-                    decision_history=list(decision_history),
-                    rule_set_history=list(rule_set_history),
+                    metric_history=list(state.metric_history),
+                    decision_history=list(state.decision_history),
+                    rule_set_history=list(state.rule_set_history),
                     total_teacher_tokens=0,
                     run_id=state.run_id,
                     log_path=log_path,
@@ -298,14 +293,25 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
                 )
 
                 report = load_report(state.latest_report_path)
-                final_dev_metrics = report.get("metrics_dev_new") or report.get(
-                    "metrics_dev_active", {}
-                )
                 final_holdout_metrics = report.get("metrics_holdout_new") or report.get(
                     "metrics_holdout_active", {}
                 )
+                if report.get("decision") == "accept":
+                    final_dev_metrics = report.get("metrics_dev_new") or {}
+                    if not final_dev_metrics:
+                        # The accepted version never ran on dev during the
+                        # cycle; measure it now so the summary reports the
+                        # final version, not the one it replaced.
+                        # shortcut: uses cycle N+1's duration, so a duration
+                        # list means the full dev split for this final run.
+                        dev_path = await run_active_on_dev(
+                            state, deps, config, run_input.config_path
+                        )
+                        final_dev_metrics = compute_dev_metrics(dev_path, run_input.config_path)
+                else:
+                    final_dev_metrics = report.get("metrics_dev_active", {})
         except Exception as exc:
-            log.warning("could not load final metrics: %s", exc)
+            log.warning("could not compute final metrics: %s", exc)
 
         write_summary(
             state,

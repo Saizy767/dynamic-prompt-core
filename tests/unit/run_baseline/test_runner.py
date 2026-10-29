@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
 from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
     BaselineRunner,
     ResultRow,
@@ -23,7 +22,7 @@ from dynamic_prompt_core.domain.models.judgment import Judgment
 from dynamic_prompt_core.domain.prompts import CLASSIFICATION_PROMPT_V0, PromptArtifact
 from dynamic_prompt_core.domain.prompts.base import PromptLayer
 from dynamic_prompt_core.infrastructure.llm import CallResult, ResponseStatus
-from dynamic_prompt_core.infrastructure.llm.extractor import ExtractionResult, Extractor
+from dynamic_prompt_core.infrastructure.llm.extractor import ExtractionResult
 
 
 @dataclass
@@ -98,6 +97,17 @@ class FakeExtractor:
 
     def __init__(self, result: ExtractionResult | None = None) -> None:
         self.extract = AsyncMock(return_value=result)
+
+    @staticmethod
+    def skipped() -> ExtractionResult:
+        return ExtractionResult(
+            theses_raw=[],
+            theses_norm=[],
+            status="skipped",
+            latency_ms=0.0,
+            raw_extract=None,
+            call_result=_make_extract_cr(),
+        )
 
 
 def _make_runner(
@@ -422,6 +432,36 @@ async def test_non_default_prompt_with_none_layers_uses_empty_rules() -> None:
     assert row.predicted_decision == 0
     assert row.selected_candidate == "0"
     assert row.classify_status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_v0_empty_rules_still_calls_classifier() -> None:
+    """A valid prompt with zero rules (the v0 baseline) must be classified
+    zero-shot, not rubber-stamped with predicted_decision=0."""
+    candidates = _make_candidates()
+    classification = _default_classification(candidates)
+    classifier = FakeClassifier(classification)
+    extractor = FakeExtractor(_make_extract_result())
+    runner = BaselineRunner(
+        classifier=classifier,
+        extractor=extractor,
+        config=RunnerConfig(),
+        split="dev",
+        candidates=candidates,
+        classify_prompt=CLASSIFICATION_PROMPT_V0,
+    )
+    runner._checkpoint_write = AsyncMock()
+    runner._semaphore = asyncio.Semaphore(1)
+
+    example = _FakeRecord(id=1, text="text", label=1)
+    results: list[ResultRow | None] = [None]
+    await runner._process_example(MagicMock(), example, 0, results)
+
+    classifier.classify.assert_called_once()
+    row = results[0]
+    assert row is not None
+    assert row.predicted_decision == 1
+    assert row.selected_candidate == "1"
 
 
 @pytest.mark.asyncio

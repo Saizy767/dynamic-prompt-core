@@ -59,7 +59,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     refine.add_argument("--run-id", default=None, help="Override run_id")
     refine.add_argument("--prompt-version", default=None, help="Override prompt_version")
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    # Artifact-name parsers (metrics, refiner, observer) split on "_".
+    if getattr(args, "run_id", None) and "_" in args.run_id:
+        parser.error("--run-id must not contain '_'")
+    return args
 
 
 def configure_logging() -> None:
@@ -125,9 +129,7 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
         scorer_backend_config_from_toml(toml_config),
         list(candidates),
     )
-    extractor = Extractor(
-        task=llm, language=RunnerConfig.from_config(config_path).language
-    )
+    extractor = Extractor(task=llm, language=RunnerConfig.from_config(config_path).language)
 
     teacher_llm_client = None
     try:
@@ -148,8 +150,11 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
                 allow_additions=bool(t.get("allow_additions", True)),
                 tokenizer_path=t.get("model_path"),
             )
+    except ValueError:
+        # Config typos (bad timeout, missing backend, ConfigError) must fail loudly.
+        raise
     except Exception as exc:
-        log.debug("teacher client not configured: %s", exc)
+        log.warning("teacher client build failed; refinement disabled: %s", exc, exc_info=True)
 
     stop_criteria_deps = None
     try:
@@ -237,6 +242,7 @@ async def run_refine(args: argparse.Namespace, config_path: str) -> int:
         filter_noisy=bool(t.get("filter_noisy", True)),
         filter_interpretive=bool(t.get("filter_interpretive", True)),
         allow_additions=bool(t.get("allow_additions", True)),
+        concurrency=int(t.get("concurrency", 2)),
     )
 
     try:

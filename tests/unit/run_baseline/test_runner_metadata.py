@@ -1,4 +1,5 @@
 """Tests for BaselineRunner run-metadata manifest and resume identity."""
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,6 @@ from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
     RunnerConfig,
 )
 from dynamic_prompt_core.domain.models.candidate import Candidate
-from dynamic_prompt_core.infrastructure.llm.extractor import ExtractionResult
 
 
 class _ClassifierWithDescribe:

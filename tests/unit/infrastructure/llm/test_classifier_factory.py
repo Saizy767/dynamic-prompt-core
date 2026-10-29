@@ -1,4 +1,5 @@
 """Unit tests for the classifier composition-root factory."""
+
 from __future__ import annotations
 
 import sys
@@ -29,6 +30,17 @@ def test_build_classifier_custom_endpoint() -> None:
     describe = classifier.describe()
     assert describe["endpoint"] == "http://10.0.0.1:7070"
     assert describe["timeout"] == 45
+
+
+def test_build_classifier_wires_scoring_concurrency() -> None:
+    from dynamic_prompt_core.infrastructure.llm.scoring.config import LlamaServerParams
+
+    config = ScorerBackendConfig(
+        backend="llama_server",
+        llama_server=LlamaServerParams(max_concurrency=3),
+    )
+    classifier = build_classifier(config, [Candidate("0"), Candidate("1")])
+    assert classifier._model._max_concurrency == 3
 
 
 def test_build_classifier_does_not_import_llama_cpp() -> None:

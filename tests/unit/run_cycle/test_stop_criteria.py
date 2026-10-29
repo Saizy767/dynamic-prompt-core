@@ -1,4 +1,5 @@
 """Unit tests for the orchestrator's content-based stop-criteria integration."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -7,10 +8,10 @@ from dynamic_prompt_core.application.ports.outbound.stop_criteria import (
     StopDecision,
     StopEvaluationContext,
 )
-from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.deps import (
     EvaluateStopCriteriaDeps,
 )
+from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
     _extract_metric_summary,
     _extract_rule_set,
@@ -85,7 +86,6 @@ def test_extract_rule_set_no_layers():
 
 def test_check_stop_max_cycles():
     state = CycleState(cycle_counter=5)
-    from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 
     config = CycleConfig(max_cycles=5)
     should_stop, reason = check_stop(state, config)
@@ -95,7 +95,6 @@ def test_check_stop_max_cycles():
 
 def test_check_stop_continue():
     state = CycleState(cycle_counter=2, candidate_queue=[{"id": 1}], any_accepted=True)
-    from dynamic_prompt_core.application.use_cases.run_cycle.config import CycleConfig
 
     config = CycleConfig(max_cycles=5)
     should_stop, reason = check_stop(state, config)

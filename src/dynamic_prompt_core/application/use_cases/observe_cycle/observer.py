@@ -353,6 +353,28 @@ def _load_json(path: str) -> dict[str, Any]:
         raise CycleObserverError(f"failed to read artifact: {path}: {exc}") from exc
 
 
+def resolve_run_id(run_id: str, config: CycleObserverConfig) -> str:
+    """Resolve the special run_id ``latest`` to the newest summary's run_id."""
+    if run_id != "latest":
+        return run_id
+    import glob
+    import re
+
+    paths = glob.glob(os.path.join(config.output_dir, "report_cycle", "summary_*.json"))
+    if not paths:
+        raise CycleObserverError(
+            f"no cycle summaries found in {config.output_dir!r}; cannot resolve run_id 'latest'"
+        )
+
+    def ts_key(p: str) -> str:
+        m = re.search(r"_(\w+)\.json$", p)
+        return m.group(1) if m else p
+
+    newest = max(paths, key=ts_key)
+    stem = os.path.basename(newest)[len("summary_") : -len(".json")]
+    return stem.rsplit("_", 1)[0]
+
+
 def load_cycle_artifacts(run_id: str, config: CycleObserverConfig) -> CycleArtifacts:
     """Discover and load all cycle artifacts for ``run_id`` (design D2, D3).
 
@@ -420,9 +442,13 @@ def build_round_summaries(
         seen_rounds.add(round_number)
 
         metrics_before = report.get("metrics_dev_active", {}) or {}
-        metrics_after = report.get("metrics_dev_new", {}) or {}
-        minority_before = _as_float(metrics_before.get("minority_f1"))
-        minority_after = _as_float(metrics_after.get("minority_f1"))
+        # metrics_dev_new is never populated by the pipeline; fall back to
+        # holdout-new so the "after" columns show the new version's metrics.
+        metrics_after = (
+            report.get("metrics_dev_new") or report.get("metrics_holdout_new") or {}
+        )
+        minority_before = _as_float(_metric_value(metrics_before, "minority_f1"))
+        minority_after = _as_float(_metric_value(metrics_after, "minority_f1"))
         if minority_before is not None and minority_after is not None:
             minority_change = minority_after - minority_before
         else:
@@ -620,13 +646,29 @@ def build_rejected_attempts(
 # --------------------------------------------------------------------------- #
 #  Section builders — metric trends, changed decisions, thesis summary, final
 # --------------------------------------------------------------------------- #
-def _metric_or_na(metrics: dict[str, Any] | None, key: str) -> float | str | None:
+def _metric_value(metrics: dict[str, Any] | None, key: str) -> Any:
+    """Read a metric from the compute_metrics artifact shape.
+
+    macro_f1/minority_f1 live under ``f1``; parse_failures is the failed
+    count under ``counts``. Returns None when absent.
+    """
     if not metrics:
-        return "N/A"
-    if key not in metrics or metrics[key] is None:
+        return None
+    if key == "parse_failures":
+        return (metrics.get("counts") or {}).get("failed")
+    if key in ("macro_f1", "minority_f1"):
+        return (metrics.get("f1") or {}).get(
+            "macro" if key == "macro_f1" else "minority"
+        )
+    return metrics.get(key)
+
+
+def _metric_or_na(metrics: dict[str, Any] | None, key: str) -> float | str | None:
+    value = _metric_value(metrics, key)
+    if value is None:
         log.warning("metric %s absent for a round; marking N/A", key)
         return "N/A"
-    return cast(float | str | None, metrics[key])
+    return cast(float | str | None, value)
 
 
 def build_metric_trends(bundle: CycleArtifacts, config: CycleObserverConfig) -> MetricTrends:
@@ -636,7 +678,9 @@ def build_metric_trends(bundle: CycleArtifacts, config: CycleObserverConfig) -> 
     """
     rows: list[MetricTrendRow] = []
     for report in bundle.reports:
-        dev = report.get("metrics_dev_new", {}) or {}
+        # metrics_dev_new is never populated; the new version's metrics are
+        # the holdout-new ones.
+        dev = report.get("metrics_dev_new") or report.get("metrics_holdout_new") or {}
         holdout = report.get("metrics_holdout_new", {}) or {}
         row = MetricTrendRow(
             round_number=report.get("cycle", 0),
@@ -760,8 +804,8 @@ def build_final_observation(
     deltas: list[MetricDelta] = []
     improved = False
     for key in METRIC_KEYS:
-        start_v = _as_float(start_metrics.get(key))
-        final_v = _as_float(final_metrics.get(key))
+        start_v = _as_float(_metric_value(start_metrics, key))
+        final_v = _as_float(_metric_value(final_metrics, key))
         if start_v is not None and final_v is not None:
             absolute = final_v - start_v
             if start_v == 0:
@@ -769,7 +813,8 @@ def build_final_observation(
                 log.warning("start metric %s is 0; relative marked N/A", key)
             else:
                 relative = (final_v - start_v) / start_v
-            if absolute > 0:
+            # More parse failures is not an improvement.
+            if absolute > 0 and key != "parse_failures":
                 improved = True
         else:
             absolute = None
@@ -833,8 +878,8 @@ def render_markdown(report: ObservationReport) -> str:
         for s in report.round_summaries:
             lines.append(
                 f"| {s.round_number} | {s.active_version_at_start} | {s.new_version} | {s.decision} "  # noqa: E501
-                f"| {_fmt(_as_float(s.metrics_dev_before.get('macro_f1')))} "
-                f"| {_fmt(_as_float(s.metrics_dev_after.get('macro_f1')))} "
+                f"| {_fmt(_as_float(_metric_value(s.metrics_dev_before, 'macro_f1')))} "
+                f"| {_fmt(_as_float(_metric_value(s.metrics_dev_after, 'macro_f1')))} "
                 f"| {_fmt(s.minority_f1_change)} | {s.changed_predictions} | {s.rollback_counter} |"
             )
     else:
@@ -1025,6 +1070,7 @@ SECTION_NAMES = (
 
 def run_observer(run_id: str, config: CycleObserverConfig) -> str:
     """Load artifacts, build all sections, write the report, and log events."""
+    run_id = resolve_run_id(run_id, config)
     bundle = load_cycle_artifacts(run_id, config)
     log_event(
         "artifacts_loaded",
