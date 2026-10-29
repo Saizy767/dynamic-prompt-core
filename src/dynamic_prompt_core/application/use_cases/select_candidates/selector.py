@@ -1,22 +1,16 @@
 """
-Stage 2 rule candidate selector.
+Rule candidate selection for the optimization cycle.
 
 Loads a thesis artifact with theses and clusters, filters and ranks clusters
 by frequency and precision, excludes clusters already in the prompt, selects
-top-N candidates with representative theses, and persists a reloadable
-candidate-list artifact for downstream rule formulation.
-
-Usage:
-    python rule_candidate_selector.py --artifact data/results/theses.json
-    python rule_candidate_selector.py --artifact data/results/theses.json \
-        --config config.toml
+top-N candidates with representative theses, and persists a candidate-list
+artifact for downstream rule formulation. Driven by the cycle via
+``select_candidates``.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
-import logging
 import os
 import tomllib
 from dataclasses import dataclass
@@ -290,85 +284,3 @@ def write_candidates(
     with open(path, "w", encoding="utf-8") as f:
         json.dump(dump, f, ensure_ascii=False, indent=2)
     return path
-
-
-def load_candidates(path: str) -> dict[str, Any]:
-    """Restore the candidate list from a rule_candidates_*.json artifact.
-
-    Returns a dict with 'metadata', 'candidates', 'already_in_prompt', and
-    'counters' keys. No selection is re-run.
-    """
-    with open(path, encoding="utf-8") as f:
-        return cast(dict[str, Any], json.load(f))
-
-
-# --------------------------------------------------------------------------- #
-#  CLI
-# --------------------------------------------------------------------------- #
-def _print_summary(
-    candidates: list[dict[str, Any]],
-    counters: dict[str, int],
-    run_id: str,
-    prompt_version: str,
-) -> None:
-    print("\n" + "=" * 60)
-    print(f"Rule candidates  (run_id={run_id}, prompt_version={prompt_version})")
-    print("=" * 60)
-    print(
-        f"  total_clusters   : {counters['total_clusters']}\n"
-        f"  passed_frequency : {counters['passed_frequency']}\n"
-        f"  excluded_in_prompt: {counters['excluded_in_prompt']}\n"
-        f"  selected_top_n   : {counters['selected_top_n']}"
-    )
-    print("-" * 60)
-    for c in candidates:
-        print(
-            f"  rank {c['rank']}: cluster {c['cluster_id']}  "
-            f"precision={c['precision']:.4f}  frequency={c['frequency']}  "
-            f"rep={len(c['representative_theses'])}"
-        )
-    print("=" * 60)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Stage 2 rule candidate selector")
-    parser.add_argument(
-        "--artifact",
-        required=True,
-        help="Path to thesis artifact (JSON with theses and clusters)",
-    )
-    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
-    args = parser.parse_args()
-
-    log = logging.getLogger(__name__)
-
-    config = RuleCandidateSelectorConfig.from_config(args.config)
-    artifact = load_thesis_artifact(args.artifact)
-    run_id = artifact["metadata"]["run_id"]
-    prompt_version = artifact["metadata"]["prompt_version"]
-
-    candidates, already_in_prompt, counters = select_candidates(artifact, config)
-
-    log.info(
-        "selection: total_clusters=%d passed_frequency=%d excluded_in_prompt=%d selected_top_n=%d",
-        counters["total_clusters"],
-        counters["passed_frequency"],
-        counters["excluded_in_prompt"],
-        counters["selected_top_n"],
-    )
-
-    artifact_path = write_candidates(
-        candidates,
-        already_in_prompt,
-        counters,
-        run_id,
-        prompt_version,
-        config,
-        config.output_dir,
-    )
-    _print_summary(candidates, counters, run_id, prompt_version)
-    print(f"Candidates: {artifact_path}")
-
-
-if __name__ == "__main__":
-    main()

@@ -75,13 +75,9 @@ ClassifierPromptBuilder → BatchTokenizerAdapter → BatchedCausalLanguageModel
 
 #### Backend selection
 
-Поддерживается три backend'а для logit-scoring, выбираются в `[model]` секции
-`config.toml`:
+Logit-scoring использует единственный backend — **`llama_server`**, выбираемый
+в `[model]` секции `config.toml`:
 
-- **`huggingface`** — загрузка модели через `transformers`.
-- **`gguf`** — загрузка локального GGUF-файла через `llama-cpp-python` (опциональная
-  зависимость). Backend использует тот же `LogitScorer` и `ClassifierPromptBuilder`,
-  что и Hugging Face; меняются только adapter'ы модели и токенизатора.
 - **`llama_server`** — HTTP-доступ к `llama-server` (Metal GPU acceleration), без
   опциональных зависимостей — используется только core-пакет `aiohttp`. Подключается
   к уже запущенному серверу (например, стартованному секцией `[llm]`).
@@ -239,9 +235,7 @@ duration = [50, 100, 200]
 - pydantic v2
 - numpy, scikit-learn, sentence-transformers (эмбеддинги и кластеризация тезисов)
 - pymorphy3 / spaCy (нормализация тезисов: `ru` / `en`)
-- pyarrow, tqdm
-- torch + transformers (candidate scoring via logit-scoring, Hugging Face backend)
-- llama-cpp-python (опционально — GGUF backend; `pip install 'dynamic-prompt-core[gguf]'`)
+- pyarrow
 - доступ к llama.cpp или vLLM серверу по OpenAI-совместимому API (thesis extraction)
 
 ## Статические проверки

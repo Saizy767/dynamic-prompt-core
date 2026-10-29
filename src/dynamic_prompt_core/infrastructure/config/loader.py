@@ -53,7 +53,7 @@ def load_raw_config(path: str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     """
     try:
         with open(path, "rb") as f:
-            return cast(dict[str, Any], tomllib.load(f))
+            return tomllib.load(f)
     except FileNotFoundError as exc:
         raise ConfigError(f"Config file not found: {path}") from exc
     except tomllib.TOMLDecodeError as exc:

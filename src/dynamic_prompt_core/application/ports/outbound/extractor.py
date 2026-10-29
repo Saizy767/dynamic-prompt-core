@@ -22,6 +22,16 @@ class ExtractionResult(Protocol):
     latency_ms: float
     raw_extract: str | None
 
+    @property
+    def call_status(self) -> str | None:
+        """Transport-level status name of the underlying call, if any.
+
+        Values follow the transport's status names (e.g. ``"ok"``,
+        ``"network_error"``, ``"http_error"``, ``"timeout"``); used by
+        callers to bucket extraction failures.
+        """
+        ...
+
 
 @runtime_checkable
 class Extractor(Protocol):

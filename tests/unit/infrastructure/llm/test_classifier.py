@@ -8,7 +8,6 @@ import pytest
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.classification_rules import ClassificationRules
-from dynamic_prompt_core.domain.models.judgment import Judgment
 from dynamic_prompt_core.infrastructure.llm.classifier import LLMLogitClassifier
 from dynamic_prompt_core.infrastructure.llm.scoring.classifier_prompt_builder import (
     ClassifierPromptBuilder,

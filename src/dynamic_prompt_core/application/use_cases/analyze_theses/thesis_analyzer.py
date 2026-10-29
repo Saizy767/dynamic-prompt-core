@@ -582,62 +582,6 @@ def write_dump(
     return path
 
 
-def load_dump(path: str, config: ThesisAnalyzerConfig) -> ThesisBank:
-    """Restore a ThesisBank and clusters from a dump file.
-
-    Embeddings and centroids are converted from lists back to numpy arrays.
-    No embeddings are recomputed and no clustering is performed.
-    """
-    with open(path, encoding="utf-8") as f:
-        dump = json.load(f)
-
-    bank = ThesisBank(config)
-
-    for norm, data in dump["theses"].items():
-        embedding = (
-            np.array(data["embedding"], dtype=np.float32) if data["embedding"] is not None else None
-        )
-        entry = ThesisEntry(
-            text_raw=data["text_raw"],
-            text_norm=data["text_norm"],
-            embedding=embedding,
-            frequency=data["frequency"],
-            positive_hits=data["positive_hits"],
-            negative_hits=data["negative_hits"],
-            demand=data["demand"],
-            selected=data["selected"],
-            in_prompt=data["in_prompt"],
-            cluster_id=data["cluster_id"],
-            source=data.get("source", "tiny"),
-        )
-        bank.theses[norm] = entry
-
-    max_cid = -1
-    for cid_str, data in dump["clusters"].items():
-        cid = int(cid_str)
-        centroid = (
-            np.array(data["centroid"], dtype=np.float32) if data["centroid"] is not None else None
-        )
-        cluster = Cluster(
-            cluster_id=cid,
-            member_norms=data["member_norms"],
-            centroid=centroid,
-            count=data["count"],
-            frequency=data["frequency"],
-            positive_hits=data["positive_hits"],
-            negative_hits=data["negative_hits"],
-            demand=data["demand"],
-            selected=data["selected"],
-            precision=data["precision"],
-        )
-        bank.clusters[cid] = cluster
-        if cid > max_cid:
-            max_cid = cid
-
-    bank._next_cluster_id = max_cid + 1
-    return bank
-
-
 def carry_over_in_prompt_flags(bank: ThesisBank, previous_bank_path: str) -> int:
     """Seed ``in_prompt`` on ``bank`` from a previous cycle's bank dump.
 

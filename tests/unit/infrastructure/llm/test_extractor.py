@@ -3,13 +3,10 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
+from dynamic_prompt_core.infrastructure.llm import CallResult, ResponseStatus
 from dynamic_prompt_core.infrastructure.llm.extractor import (
-    ExtractionResult,
     Extractor,
 )
-from dynamic_prompt_core.infrastructure.llm import CallResult, ResponseStatus
 
 
 class TestExtractor:
@@ -32,7 +29,10 @@ class TestExtractor:
             status=ResponseStatus.OK,
         ))
 
-        with patch("dynamic_prompt_core.infrastructure.llm.extractor.normalize_theses", return_value=["norm one", "norm two"]):
+        with patch(
+            "dynamic_prompt_core.infrastructure.llm.extractor.normalize_theses",
+            return_value=["norm one", "norm two"],
+        ):
             ext = Extractor(task=mock_task, language="ru")
             result = await ext.extract(MagicMock(), "some text", true_val=1)
 
@@ -70,9 +70,12 @@ class TestExtractor:
             parse_status=None, status=ResponseStatus.OK,
         ))
 
-        with patch("dynamic_prompt_core.infrastructure.llm.extractor.normalize_theses", return_value=["n"]):
+        with patch(
+            "dynamic_prompt_core.infrastructure.llm.extractor.normalize_theses",
+            return_value=["n"],
+        ):
             ext = Extractor(task=mock_task)
-            result = await ext.extract(MagicMock(), "text", true_val=0)
+            await ext.extract(MagicMock(), "text", true_val=0)
 
         call_kwargs = mock_task.extract_theses_detailed.call_args
         assert "predicted_decision" not in call_kwargs.kwargs

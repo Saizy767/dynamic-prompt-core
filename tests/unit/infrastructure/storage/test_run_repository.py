@@ -12,7 +12,6 @@ import pytest
 
 from dynamic_prompt_core.infrastructure.storage.run_repository import (
     FileRunRepository,
-    RunConflictError,
     RunCorruptedError,
     RunRepositoryError,
     RunValidationError,
@@ -146,7 +145,6 @@ class TestErrorHierarchy:
         assert issubclass(RunValidationError, RunRepositoryError)
         assert issubclass(RunWriteError, RunRepositoryError)
         assert issubclass(RunCorruptedError, RunRepositoryError)
-        assert issubclass(RunConflictError, RunRepositoryError)
         assert issubclass(RunRepositoryError, ValueError)
 
 
@@ -164,118 +162,6 @@ class TestSchemaVersion:
         repo.save_results(results, "run-1", results_path)
         loaded = repo.load_results(results_path)
         assert loaded[0]["schema_version"] == 99
-
-
-class TestRunStatusLifecycle:
-    def test_completed_after_successful_save(
-        self,
-        repo: FileRunRepository,
-        results_path: str,
-        results_dir: str,
-    ) -> None:
-        repo.save_results(_make_results(), "run-1", results_path)
-        status = repo.get_status("run-1", results_dir)
-        assert status["status"] == "completed"
-
-    def test_not_completed_after_failed_save(
-        self,
-        repo: FileRunRepository,
-        results_path: str,
-        results_dir: str,
-    ) -> None:
-        with patch("os.replace", side_effect=OSError("replace failed")):
-            with pytest.raises(RunRepositoryError):
-                repo.save_results(_make_results(), "run-1", results_path)
-
-        status_path = os.path.join(results_dir, "run-1.status.json")
-        if os.path.exists(status_path):
-            status = repo.get_status("run-1", results_dir)
-            assert status["status"] != "completed"
-
-    def test_mark_failed(
-        self,
-        repo: FileRunRepository,
-        results_dir: str,
-    ) -> None:
-        repo.set_status("run-1", "running", results_dir)
-        repo.mark_failed("run-1", results_dir, "something went wrong")
-        status = repo.get_status("run-1", results_dir)
-        assert status["status"] == "failed"
-        assert status["error"] == "something went wrong"
-
-    def test_set_get_round_trip(
-        self,
-        repo: FileRunRepository,
-        results_dir: str,
-    ) -> None:
-        repo.set_status("run-1", "running", results_dir)
-        status = repo.get_status("run-1", results_dir)
-        assert status["status"] == "running"
-        assert status["run_id"] == "run-1"
-
-
-class TestIdempotentSaves:
-    def test_same_data_is_noop(self, repo: FileRunRepository, results_path: str) -> None:
-        results = _make_results()
-        repo.save_results(results, "run-1", results_path)
-        original = open(results_path, encoding="utf-8").read()
-
-        path = repo.save_results(results, "run-1", results_path)
-        assert path == results_path
-        assert open(results_path, encoding="utf-8").read() == original
-
-    def test_different_data_raises_conflict(
-        self, repo: FileRunRepository, results_path: str
-    ) -> None:
-        repo.save_results(_make_results(), "run-1", results_path)
-        original = open(results_path, encoding="utf-8").read()
-
-        with pytest.raises(RunConflictError):
-            repo.save_results(_make_results(5), "run-1", results_path)
-
-        assert open(results_path, encoding="utf-8").read() == original
-
-
-class TestRecovery:
-    def test_recover_interrupted_run(
-        self,
-        repo: FileRunRepository,
-        results_path: str,
-        results_dir: str,
-    ) -> None:
-        repo.save_results(_make_results(), "run-1", results_path)
-        repo.set_status("run-1", "running", results_dir)
-
-        recovered = repo.recover_interrupted(results_dir)
-        assert "run-1" in recovered
-        status = repo.get_status("run-1", results_dir)
-        assert status["status"] == "interrupted"
-
-    def test_recovery_does_not_delete_results(
-        self,
-        repo: FileRunRepository,
-        results_path: str,
-        results_dir: str,
-    ) -> None:
-        repo.save_results(_make_results(), "run-1", results_path)
-        repo.set_status("run-1", "running", results_dir)
-
-        repo.recover_interrupted(results_dir)
-        assert os.path.exists(results_path)
-
-    def test_recovery_is_idempotent(
-        self,
-        repo: FileRunRepository,
-        results_path: str,
-        results_dir: str,
-    ) -> None:
-        repo.save_results(_make_results(), "run-1", results_path)
-        repo.set_status("run-1", "running", results_dir)
-
-        first = repo.recover_interrupted(results_dir)
-        second = repo.recover_interrupted(results_dir)
-        assert "run-1" in first
-        assert second == []
 
 
 class TestConcurrency:
@@ -340,24 +226,6 @@ class TestRegression:
         loaded = repo.load_results(results_path)
         assert len(loaded) == 3
         assert loaded[0]["sample_id"] == 0
-
-    def test_full_lifecycle(
-        self,
-        repo: FileRunRepository,
-        results_path: str,
-        results_dir: str,
-    ) -> None:
-        results = _make_results()
-        repo.save_results(results, "run-lifecycle", results_path)
-
-        status = repo.get_status("run-lifecycle", results_dir)
-        assert status["status"] == "completed"
-
-        loaded = repo.load_results(results_path)
-        assert len(loaded) == len(results)
-        for orig, got in zip(results, loaded, strict=True):
-            assert got["sample_id"] == orig["sample_id"]
-            assert got["label"] == orig["label"]
 
 
 class TestManifestHardening:

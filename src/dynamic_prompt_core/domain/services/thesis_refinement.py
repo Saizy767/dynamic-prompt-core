@@ -1,8 +1,6 @@
 """Pure domain logic for applying a teacher refinement plan to candidate theses.
 
 This module is framework-free: it uses only the Python standard library.
-The ``RefinementPlanData`` dataclass mirrors the Pydantic ``RefinementPlan``
-from ``application.schemas.refinement`` but without any framework dependency.
 ``RefinementReview`` is the typed result of a teacher review call, kept in
 domain so both the port and the infrastructure adapter can import it without
 creating a layer cycle.

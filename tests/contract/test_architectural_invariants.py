@@ -51,20 +51,12 @@ class TestConcreteClassifierConstructionHasOneSource:
             "build_cli_deps must call build_classifier"
         )
 
-    def test_runner_cli_uses_shared_factory(self) -> None:
-        runner_path = SRC_ROOT / "application" / "use_cases" / "run_baseline" / "runner.py"
-        text = _file_text(runner_path)
-        assert "build_classifier" in text, (
-            "runner CLI must call build_classifier"
-        )
-
     def test_neither_composition_root_constructs_llm_logit_classifier_directly(self) -> None:
-        """Neither build_cli_deps nor runner._main_async should construct
-        LLMLogitClassifier directly (they must go through the factory)."""
+        """build_cli_deps must not construct LLMLogitClassifier directly
+        (it must go through the factory)."""
         main_path = SRC_ROOT / "interfaces" / "cli" / "main.py"
-        runner_path = SRC_ROOT / "application" / "use_cases" / "run_baseline" / "runner.py"
 
-        for path in [main_path, runner_path]:
+        for path in [main_path]:
             tree = _parse_module(path)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):

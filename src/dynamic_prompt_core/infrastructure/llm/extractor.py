@@ -13,9 +13,8 @@ from dataclasses import dataclass
 from typing import TypeVar, cast
 
 import aiohttp
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from dynamic_prompt_core.application.schemas import ThesisExtraction
 from dynamic_prompt_core.infrastructure.llm import (
     AsyncTask,
     CallResult,
@@ -27,6 +26,26 @@ from dynamic_prompt_core.infrastructure.nlp import normalize_theses
 log = logging.getLogger(__name__)
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", re.DOTALL)
+
+
+class ThesisExtraction(BaseModel):
+    """Structured output for thesis extraction: 3-5 theses, each 2-6 words."""
+
+    theses: list[str]
+
+    @field_validator("theses")
+    @classmethod
+    def _thesis_count(cls, v: list[str]) -> list[str]:
+        if not 3 <= len(v) <= 5:
+            raise ValueError(f"expected 3-5 theses, got {len(v)}")
+        for t in v:
+            word_count = len(t.split())
+            if not 2 <= word_count <= 6:
+                raise ValueError(
+                    f"each thesis must be 2-6 words; "
+                    f"'{t}' has {word_count}"
+                )
+        return v
 
 _STATUS_OK = "ok"
 _STATUS_REPAIRED = "repaired"
@@ -69,6 +88,11 @@ class ExtractionResult:
     latency_ms: float
     raw_extract: str | None
     call_result: CallResult
+
+    @property
+    def call_status(self) -> str | None:
+        """Transport-level status name of the underlying call, if any."""
+        return self.call_result.status.value
 
 
 class Extractor:
