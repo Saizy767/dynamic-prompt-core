@@ -1,4 +1,5 @@
 """Dataset file loading from jsonl and parquet formats."""
+
 from __future__ import annotations
 
 import json
@@ -18,8 +19,7 @@ def load_dataset(path: str) -> list[Record]:
         rows = _read_parquet(path)
     else:
         raise DatasetError(
-            f"unsupported file extension '{ext}' for '{path}' "
-            "(expected .jsonl or .parquet)"
+            f"unsupported file extension '{ext}' for '{path}' (expected .jsonl or .parquet)"
         )
     return _validate(rows)
 
@@ -43,8 +43,7 @@ def _read_parquet(path: str) -> list[dict[str, Any]]:
             import pandas as pd
         except ImportError as exc:
             raise DatasetError(
-                "reading parquet requires 'pyarrow' or 'pandas'; "
-                "install with: pip install pyarrow"
+                "reading parquet requires 'pyarrow' or 'pandas'; install with: pip install pyarrow"
             ) from exc
         df = pd.read_parquet(path)
         return cast(list[dict[str, Any]], df.to_dict(orient="records"))
@@ -58,20 +57,17 @@ def _validate(rows: list[dict[str, Any]]) -> list[Record]:
         rid = row.get("id")
         for fname in REQUIRED_FIELDS:
             if fname not in row or row[fname] is None:
-                raise DatasetError(
-                    f"record id={rid!r} is missing required field '{fname}'"
-                )
+                raise DatasetError(f"record id={rid!r} is missing required field '{fname}'")
         label = row["label"]
         if label not in (0, 1):
-            raise DatasetError(
-                f"record id={rid!r} has invalid label {label!r} "
-                "(expected 0 or 1)"
+            raise DatasetError(f"record id={rid!r} has invalid label {label!r} (expected 0 or 1)")
+        records.append(
+            Record(
+                id=rid,
+                text=str(row["text"]),
+                label=int(label),
+                ambiguous=bool(row.get("ambiguous", False)),
+                notes=str(row.get("notes", "")),
             )
-        records.append(Record(
-            id=rid,
-            text=str(row["text"]),
-            label=int(label),
-            ambiguous=bool(row.get("ambiguous", False)),
-            notes=str(row.get("notes", "")),
-        ))
+        )
     return records

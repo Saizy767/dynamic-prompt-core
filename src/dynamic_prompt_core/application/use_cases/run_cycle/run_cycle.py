@@ -104,11 +104,9 @@ def _load_best_prompt(
     pattern = os.path.join(prompt_dir, "prompt_v*_*_*.json")
     candidates = _sort_prompt_version_paths(globlib.glob(pattern))
     if not candidates:
-        log.info(
-            "prompt_start=best but no prompt artifact in %s; using v0",
-            prompt_dir,
+        raise CycleOrchestratorError(
+            f"prompt_start=best but no prompt artifact found in {prompt_dir!r}"
         )
-        return CLASSIFICATION_PROMPT_V0, ""
 
     path = candidates[-1]
     data = load_prompt_version(path)
@@ -137,9 +135,9 @@ def load_initial_state(
 ) -> CycleState:
     """Load the initial cycle state.
 
-    Loads the active prompt via ``deps.prompt_repository`` (or v0 when no
-    active version exists).  Raises ``CycleOrchestratorError`` when a
-    required artifact is missing.
+    Loads the active prompt via ``deps.prompt_repository``.  Raises
+    ``CycleOrchestratorError`` when the active version or dataset artifact
+    is missing — no silent fallback to the baseline prompt.
     """
     active_version = CLASSIFICATION_PROMPT_V0
     active_version_path = ""
@@ -165,8 +163,12 @@ def load_initial_state(
                 sha256=sha,
             )
             active_version_path = str(active_record.get("path", ""))
+        except CycleOrchestratorError:
+            raise
         except Exception as exc:
-            log.debug("no active prompt in repository, using v0: %s", exc)
+            raise CycleOrchestratorError(
+                f"no active prompt version found in the repository: {exc}"
+            ) from exc
 
     dataset_artifact = ""
     try:
@@ -212,6 +214,7 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
     log_path = os.path.join(output_dir, "log_cycle", f"cycle_log_{run_id}.jsonl")
 
     stop_reason = "unrecoverable_error"
+    state: CycleState | None = None
 
     try:
         if run_input.resume_from:
@@ -230,7 +233,7 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
         while True:
             should_stop, reason = check_stop(state, config)
             if should_stop:
-                stop_reason = reason or "max_rounds_reached"
+                stop_reason = reason or "max_cycles_reached"
                 break
 
             state = await run_cycle_step(state, deps, config, run_input.config_path, log_path)
@@ -338,4 +341,14 @@ async def run_cycle(deps: RunCycleDeps, run_input: RunCycleInput) -> RunCycleRes
     except Exception as exc:
         log.exception("unrecoverable error during cycle execution")
         log_event("error", 0, {"error": str(exc)}, log_path)
+        if state is not None:
+            write_summary(
+                state,
+                {},
+                {},
+                "unrecoverable_error",
+                state.run_id,
+                deps.run_repository,
+                output_dir,
+            )
         raise

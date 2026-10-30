@@ -9,6 +9,7 @@ Usage::
 
     python tools/capture_gguf_reference.py [N_ROWS]
 """
+
 from __future__ import annotations
 
 import asyncio

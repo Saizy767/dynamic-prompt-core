@@ -1,4 +1,5 @@
 """Unit tests for per-stage scoring instrumentation."""
+
 from __future__ import annotations
 
 import pytest

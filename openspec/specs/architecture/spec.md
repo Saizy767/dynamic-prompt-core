@@ -419,7 +419,7 @@ architectural contracts.
 Implementation of concrete use cases, beyond defining the `run_cycle` contract
 and its invocation point, SHALL remain out of scope. Implementation of concrete
 adapters SHALL remain out of scope, except for explicitly existing dependencies
-(`ServerLauncher`, `AsyncTaskClient`). Migration of existing code, full test
+(`ServerLauncher`, `AsyncTask`). Migration of existing code, full test
 implementation, and changes to existing CI MAY be performed as separate tasks.
 
 #### Scenario: Use case implementation out of scope

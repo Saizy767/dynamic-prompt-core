@@ -1,4 +1,5 @@
 """CLI observer: format cycle observation reports as markdown or JSON."""
+
 from __future__ import annotations
 
 import argparse

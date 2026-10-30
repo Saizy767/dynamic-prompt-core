@@ -2,8 +2,8 @@
 Stage 3 cycle observer.
 
 Loads the artifacts produced by a completed optimization cycle (per-round
-reports, decision artifacts, prompt-version records, metrics, thesis dumps, and
-changed-decisions lists) and renders a human- or machine-readable review of what
+reports, prompt-version records, thesis dumps, and changed-decisions lists)
+and renders a human- or machine-readable review of what
 changed between rounds: per-round summaries, prompt-rule evolution, rejected
 attempts, metric trends, changed predictions, a thesis-store summary, and a
 final observation with net improvement and stop reason.
@@ -126,9 +126,6 @@ class RejectedAttempt:
     formulated_rules: list[dict[str, Any]]
     source_candidates: list[int]
     rejected_rules: list[RejectedRule]
-    metrics_new: dict[str, Any] | None
-    metrics_active: dict[str, Any] | None
-    diff_macro_f1: float | None
     individual_details_persisted: bool
 
 
@@ -224,8 +221,6 @@ class ObservationReport:
 class CycleArtifacts:
     reports: list[dict[str, Any]] = field(default_factory=list)
     report_paths: list[str] = field(default_factory=list)
-    decisions: list[dict[str, Any]] = field(default_factory=list)
-    decision_paths: list[str] = field(default_factory=list)
     prompt_versions: list[dict[str, Any]] = field(default_factory=list)
     prompt_version_paths: list[str] = field(default_factory=list)
     thesis_dumps: list[dict[str, Any]] = field(default_factory=list)
@@ -278,17 +273,6 @@ def _sort_report_paths(paths: list[str]) -> list[str]:
     return sorted(paths, key=key)
 
 
-def _sort_decision_paths(paths: list[str]) -> list[str]:
-    """Sort decision paths by timestamp (ascending)."""
-    import re
-
-    def key(p: str) -> str:
-        m = re.search(r"_(\w+)\.json$", p)
-        return m.group(1) if m else p
-
-    return sorted(paths, key=key)
-
-
 def _sort_prompt_version_paths(paths: list[str]) -> list[str]:
     """Sort prompt-version paths by version number."""
     import re
@@ -319,21 +303,19 @@ def _sort_thesis_dump_paths(paths: list[str]) -> list[str]:
 def discover_artifacts(run_id: str, config: CycleObserverConfig) -> dict[str, list[str]]:
     """Glob ``output_dir`` for the artifacts of ``run_id`` (design D2).
 
-    Returns a dict with sorted path lists: reports, decisions, prompt_versions,
+    Returns a dict with sorted path lists: reports, prompt_versions,
     thesis_dumps, summaries.
     """
     import glob
 
     base = config.output_dir
     reports = glob.glob(os.path.join(base, "report_cycle", f"report_{run_id}_cycle*_*.json"))
-    decisions = glob.glob(os.path.join(base, "decision_cycle", f"decision_{run_id}_*_*.json"))
     prompt_versions = glob.glob(os.path.join(base, "prompt", f"prompt_v*_{run_id}_*.json"))
     thesis_dumps = glob.glob(os.path.join(base, "thesis_bank", f"thesis_bank_{run_id}_*_*.json"))
     summaries = glob.glob(os.path.join(base, "report_cycle", f"summary_{run_id}_*.json"))
 
     return {
         "reports": _sort_report_paths(reports),
-        "decisions": _sort_decision_paths(decisions),
         "prompt_versions": _sort_prompt_version_paths(prompt_versions),
         "thesis_dumps": _sort_thesis_dump_paths(thesis_dumps),
         "summaries": sorted(summaries),
@@ -390,11 +372,6 @@ def load_cycle_artifacts(run_id: str, config: CycleObserverConfig) -> CycleArtif
         bundle.reports.append(_load_json(path))
         bundle.report_paths.append(path)
 
-    # Decisions.
-    for path in discovered["decisions"]:
-        bundle.decisions.append(_load_json(path))
-        bundle.decision_paths.append(path)
-
     # Prompt versions.
     for path in discovered["prompt_versions"]:
         bundle.prompt_versions.append(_load_json(path))
@@ -442,11 +419,9 @@ def build_round_summaries(
         seen_rounds.add(round_number)
 
         metrics_before = report.get("metrics_dev_active", {}) or {}
-        # metrics_dev_new is never populated by the pipeline; fall back to
-        # holdout-new so the "after" columns show the new version's metrics.
-        metrics_after = (
-            report.get("metrics_dev_new") or report.get("metrics_holdout_new") or {}
-        )
+        # The pipeline does not run the finalized version on dev; the
+        # "after" side is the new version's holdout metrics, labeled as such.
+        metrics_after = report.get("metrics_dev_new") or report.get("metrics_holdout_new") or {}
         minority_before = _as_float(_metric_value(metrics_before, "minority_f1"))
         minority_after = _as_float(_metric_value(metrics_after, "minority_f1"))
         if minority_before is not None and minority_after is not None:
@@ -580,10 +555,7 @@ def build_rejected_attempts(
     summary = bundle.summary or {}
     rollback_history = summary.get("rollback_history", []) or []
 
-    # Index decisions and prompt versions by new version.
-    decisions_by_version: dict[str, dict[str, Any]] = {}
-    for dec in bundle.decisions:
-        decisions_by_version[dec.get("new_version", "")] = dec
+    # Index prompt versions by version.
     versions_by_version: dict[str, dict[str, Any]] = {}
     for v in bundle.prompt_versions:
         versions_by_version[v.get("version", "")] = v
@@ -594,7 +566,6 @@ def build_rejected_attempts(
         round_number = entry.get("round", 0)
         reason = entry.get("reason", "")
 
-        dec = decisions_by_version.get(version, {})
         pv = versions_by_version.get(version, {})
         meta = pv.get("metadata", {}) or {}
         rejected_raw = meta.get("rejected_rules", []) or []
@@ -634,9 +605,6 @@ def build_rejected_attempts(
                 formulated_rules=pv.get("rules", []) or [],
                 source_candidates=pv.get("source_candidates", []) or [],
                 rejected_rules=rejected_rules,
-                metrics_new=dec.get("metrics_new"),
-                metrics_active=dec.get("metrics_active"),
-                diff_macro_f1=dec.get("diff_macro_f1"),
                 individual_details_persisted=individual_persisted,
             )
         )
@@ -657,9 +625,7 @@ def _metric_value(metrics: dict[str, Any] | None, key: str) -> Any:
     if key == "parse_failures":
         return (metrics.get("counts") or {}).get("failed")
     if key in ("macro_f1", "minority_f1"):
-        return (metrics.get("f1") or {}).get(
-            "macro" if key == "macro_f1" else "minority"
-        )
+        return (metrics.get("f1") or {}).get("macro" if key == "macro_f1" else "minority")
     return metrics.get(key)
 
 
@@ -870,7 +836,7 @@ def render_markdown(report: ObservationReport) -> str:
     lines.append("")
     if report.round_summaries:
         lines.append(
-            "| Round | Active at start | New version | Decision | Dev F1 before | Dev F1 after | Minority F1 change | Changed preds | Rollbacks |"  # noqa: E501
+            "| Round | Active at start | New version | Decision | Dev F1 before | After F1 (holdout) | Minority F1 change | Changed preds | Rollbacks |"  # noqa: E501
         )
         lines.append(
             "|-------|-----------------|-------------|----------|---------------|--------------|--------------------|---------------|-----------|"
@@ -1076,7 +1042,6 @@ def run_observer(run_id: str, config: CycleObserverConfig) -> str:
         "artifacts_loaded",
         {
             "reports": len(bundle.reports),
-            "decisions": len(bundle.decisions),
             "prompt_versions": len(bundle.prompt_versions),
             "thesis_dumps": len(bundle.thesis_dumps),
         },
@@ -1165,7 +1130,6 @@ def main() -> None:
         help="Output path (overrides config output_path)",
     )
     args = parser.parse_args()
-
 
     config = CycleObserverConfig.from_config(args.config)
     if args.format is not None:

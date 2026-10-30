@@ -4,7 +4,8 @@
 
 Start, health-check, and manage the lifecycle of an OpenAI-compatible
 inference server (llama.cpp or vLLM) from a single `config.toml`, handing off
-the live endpoint to clients like `asyncTask.py`.
+the live endpoint to clients like the `AsyncTask` transport client
+(`infrastructure/llm/client.py`).
 
 ## Requirements
 
@@ -76,10 +77,10 @@ message naming the missing or invalid key.
 - **THEN** the launcher exits with an error message naming the invalid backend value
 
 ### Requirement: Shared config schema with client
-The launcher SHALL read the same `config.toml` `[llm]` section that
-`asyncTask.py` reads, preserving existing keys `model_path` and
+The launcher SHALL read the same `config.toml` `[llm]` section that the
+`AsyncTask` transport client reads, preserving existing keys `model_path` and
 `served_model_name`, and adding launcher-only keys that the client ignores.
 
 #### Scenario: Client and launcher agree on model identity
-- **WHEN** the launcher starts a server from `config.toml` and `asyncTask.py` connects to it
+- **WHEN** the launcher starts a server from `config.toml` and the `AsyncTask` client connects to it
 - **THEN** both use the same `served_model_name` so the client's model field matches the server's served name

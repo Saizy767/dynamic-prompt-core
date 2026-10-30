@@ -12,7 +12,6 @@ import re
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
-import aiohttp
 from pydantic import BaseModel, field_validator
 
 from dynamic_prompt_core.infrastructure.llm import (
@@ -41,11 +40,9 @@ class ThesisExtraction(BaseModel):
         for t in v:
             word_count = len(t.split())
             if not 2 <= word_count <= 6:
-                raise ValueError(
-                    f"each thesis must be 2-6 words; "
-                    f"'{t}' has {word_count}"
-                )
+                raise ValueError(f"each thesis must be 2-6 words; '{t}' has {word_count}")
         return v
+
 
 _STATUS_OK = "ok"
 _STATUS_REPAIRED = "repaired"
@@ -105,7 +102,6 @@ class Extractor:
 
     async def extract(
         self,
-        session: aiohttp.ClientSession,
         text: str,
         true_val: int | None = None,
     ) -> ExtractionResult:
@@ -116,7 +112,6 @@ class Extractor:
         """
         try:
             call_result = await self._task.extract_theses_detailed(
-                session,
                 text,
                 ThesisExtraction,
                 system_prompt=self._system_prompt,
@@ -145,6 +140,10 @@ class Extractor:
             raw_extract=call_result.raw_content,
             call_result=call_result,
         )
+
+    async def aclose(self) -> None:
+        """Release the underlying transport (shared AsyncTask session)."""
+        await self._task.aclose()
 
     @staticmethod
     def skipped() -> ExtractionResult:

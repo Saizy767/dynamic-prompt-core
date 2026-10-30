@@ -51,18 +51,17 @@ alter rule text unless the existing contract requires it. When `layers` is
 ### Requirement: Empty rules represent absence, not an error
 An empty `ClassificationRules` (zero rules) SHALL be a valid representation of
 the absence of classification rules. It SHALL NOT raise an exception at
-construction or conversion. The orchestration layer SHALL use the empty
-representation to skip classifier invocation and set classification to `0`
-without calling the `Classifier`. An empty `ClassificationRules` SHALL NOT
-trigger `build_classification_prompt()`.
+construction or conversion. The orchestration layer SHALL pass the empty
+representation to the `Classifier` as an honest zero-shot baseline: the
+classifier prompt is built with an empty rules section.
 
 #### Scenario: Empty rules are valid
 - **WHEN** `ClassificationRules` is constructed with an empty tuple
 - **THEN** no exception is raised and `len(rules) == 0`
 
-#### Scenario: Empty rules do not trigger prompt building
+#### Scenario: Empty rules run zero-shot
 - **WHEN** the orchestration layer receives an empty `ClassificationRules`
-- **THEN** it does not call `build_classification_prompt()` and sets classification to `0`
+- **THEN** the `Classifier` is called and the classifier prompt contains an empty rules section
 
 ### Requirement: Invalid rules are distinguished from empty rules
 The conversion SHALL distinguish between absent rules (valid, empty
@@ -80,18 +79,22 @@ SHALL be tested.
 - **WHEN** a `PromptArtifact` has structurally present but corrupt rules
 - **THEN** the conversion raises an error rather than returning an empty `ClassificationRules`
 
-### Requirement: Rule count constraint preserved for prompt building
-The existing constraint of 3-5 rules for `build_classification_prompt()` SHALL
-be preserved. `ClassificationRules` itself SHALL NOT enforce the 3-5 limit
-(allowing zero rules for absence), but when rules are non-empty and
-`build_classification_prompt()` is invoked, the existing validation SHALL apply.
-The `Classifier` SHALL validate the rule set at its boundary before invoking the
-scoring mechanism.
+### Requirement: Rule count constraint enforced at composition time
+The rule-count limit for classification prompts SHALL be enforced at
+composition time by the prompt composer (`max_rules`, default 5).
+`ClassificationRules` itself SHALL NOT enforce a count limit (allowing zero
+rules for the zero-shot absence case), and the `Classifier` SHALL NOT
+re-validate the count at its boundary — it trusts the `ClassificationRules`
+produced upstream.
 
-#### Scenario: Empty rules bypass the 3-5 constraint
+#### Scenario: Empty rules carry no count constraint
 - **WHEN** `ClassificationRules` has zero rules
-- **THEN** no 3-5 validation is triggered because `build_classification_prompt()` is not called
+- **THEN** no count validation is triggered anywhere and the classifier runs the zero-shot baseline
 
-#### Scenario: Non-empty rules validated at classifier boundary
+#### Scenario: Composer enforces the limit
+- **WHEN** the composer assembles a new prompt version
+- **THEN** the number of rules respects `max_rules` (default 5)
+
+#### Scenario: Classifier trusts upstream validation
 - **WHEN** the `Classifier` receives non-empty `ClassificationRules`
-- **THEN** the existing 3-5 rule validation applies before scoring proceeds
+- **THEN** no rule-count re-validation runs before scoring

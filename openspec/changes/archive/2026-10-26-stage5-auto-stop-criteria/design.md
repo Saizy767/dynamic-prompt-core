@@ -85,7 +85,8 @@ The port defines a single method:
 
 ```python
 async def evaluate(
-    self, context: StopEvaluationContext,
+    self,
+    context: StopEvaluationContext,
 ) -> StopDecision: ...
 ```
 
@@ -155,9 +156,9 @@ class StopEvaluationContext:
     rollback_counter: int
     max_consecutive_rollbacks: int
     candidate_queue_size: int
-    new_candidates_found: int          # candidates found in the current round
+    new_candidates_found: int  # candidates found in the current round
     metric_history: list[dict[str, float]]  # [{accuracy, macro_f1, minority_f1}, ...] per round
-    decision_history: list[str]        # ["accept", "rollback", ...] per round
+    decision_history: list[str]  # ["accept", "rollback", ...] per round
     rule_set_history: list[frozenset[str]]  # rule ids in the active version, per round
     total_teacher_tokens: int
     config: StopCriteriaConfig
@@ -178,11 +179,11 @@ A frozen dataclass:
 @dataclass(frozen=True)
 class StopDecision:
     should_stop: bool
-    reason: str | None                 # None when continue
-    triggered_criteria: list[str]      # all criteria that fired, in check order
+    reason: str | None  # None when continue
+    triggered_criteria: list[str]  # all criteria that fired, in check order
     round_number: int
     metric_snapshot: list[dict[str, float]]  # last plateau_window entries
-    counters: dict[str, int]           # {rounds, rollbacks, tokens, candidates}
+    counters: dict[str, int]  # {rounds, rollbacks, tokens, candidates}
 ```
 
 When `should_stop` is `False`, `reason` is `None` and `triggered_criteria` is
@@ -216,12 +217,12 @@ The combined evaluation runs them in a fixed order and collects all triggers:
 
 ```python
 CHECK_ORDER = [
-    _check_budget,              # critical
-    _check_no_candidates,       # critical
-    _check_plateau,             # qualitative
-    _check_degradation,         # qualitative
-    _check_stagnation,          # qualitative
-    _check_rollback_streak,     # rollback
+    _check_budget,  # critical
+    _check_no_candidates,  # critical
+    _check_plateau,  # qualitative
+    _check_degradation,  # qualitative
+    _check_stagnation,  # qualitative
+    _check_rollback_streak,  # rollback
 ]
 ```
 
@@ -295,7 +296,7 @@ class StopCriteriaConfig:
     stagnation_window: int = 3
     max_total_rounds: int = 10
     max_total_tokens: int | None = None
-    enabled_criteria: list[str] | None = None   # None = all
+    enabled_criteria: list[str] | None = None  # None = all
     decision_metric: str = "macro_f1"
 ```
 
@@ -310,11 +311,16 @@ The use case uses `log = logging.getLogger(__name__)` and never calls
 the existing `log_event` helper (`report.py:131`):
 
 ```python
-log_event("stop_evaluation", round_number, {
-    "triggered_criteria": [...],
-    "decision": "stop" / "continue",
-    "reason": ...,
-}, log_path)
+log_event(
+    "stop_evaluation",
+    round_number,
+    {
+        "triggered_criteria": [...],
+        "decision": "stop" / "continue",
+        "reason": ...,
+    },
+    log_path,
+)
 ```
 
 This reuses the orchestrator's append-only log rather than introducing a

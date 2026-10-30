@@ -4,12 +4,12 @@ Implements the ``TeacherLLMClient`` port by wrapping ``AsyncTask`` pointed at
 the teacher endpoint. Contains no refinement business logic — only transport,
 prompt assembly, and response parsing.
 """
+
 from __future__ import annotations
 
 import json
 from typing import Any
 
-import aiohttp
 from pydantic import BaseModel
 
 from dynamic_prompt_core.domain.services.thesis_refinement import RefinementReview
@@ -30,6 +30,7 @@ class _RefinementPlanStub(BaseModel):
     The actual parsing is done via raw JSON in ``_parse_refinement_json``
     to avoid importing ``application.schemas`` from infrastructure.
     """
+
     keep: list[str] = []
     reformulate: list[dict[str, str]] = []
     drop: list[dict[str, str]] = []
@@ -140,12 +141,8 @@ class TeacherClient:
         theses: list[str],
     ) -> RefinementReview:
         """Send one teacher call and parse the response into a ``RefinementReview``."""
-        user_message = (
-            f"Text:\n{text}\n\nCandidate theses:\n"
-            + "\n".join(f"- {t}" for t in theses)
-        )
+        user_message = f"Text:\n{text}\n\nCandidate theses:\n" + "\n".join(f"- {t}" for t in theses)
         raw: RawResponse = await self._task.analyze_raw(
-            _get_session(),
             user_message,
             _RefinementPlanStub,
             system_prompt=self._system_prompt,
@@ -163,8 +160,7 @@ class TeacherClient:
         return RefinementReview(
             keep=list(data.get("keep", [])),
             reformulate=[
-                {"from": item["from"], "to": item["to"]}
-                for item in data.get("reformulate", [])
+                {"from": item["from"], "to": item["to"]} for item in data.get("reformulate", [])
             ],
             drop=[
                 {"thesis": item["thesis"], "reason": item["reason"]}
@@ -174,21 +170,3 @@ class TeacherClient:
             latency_ms=raw.latency_ms,
             usage=raw.usage,
         )
-
-
-_session: aiohttp.ClientSession | None = None
-
-
-def _get_session() -> aiohttp.ClientSession:
-    global _session
-    if _session is None or _session.closed:
-        connector = aiohttp.TCPConnector(limit=4)
-        _session = aiohttp.ClientSession(connector=connector)
-    return _session
-
-
-async def close_session() -> None:
-    global _session
-    if _session is not None and not _session.closed:
-        await _session.close()
-    _session = None

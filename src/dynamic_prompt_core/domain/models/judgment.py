@@ -1,4 +1,5 @@
 """Domain model for the result of evaluating a candidate."""
+
 from __future__ import annotations
 
 import math
@@ -11,10 +12,12 @@ from dynamic_prompt_core.domain.models.candidate import Candidate
 class Judgment:
     """The result of evaluating one Candidate against a classification input.
 
-    The score is a probability in [0, 1] derived from softmax over all
-    candidates' mean log-probability scores.  Higher means stronger
-    model-backed support for the candidate.  Scores across all candidates
-    for one input sum to 1.0.
+    The score is an opaque numeric ranking signal: higher means stronger
+    model-backed support for the candidate.  Only the ORDER of scores across
+    candidates carries meaning — the infrastructure currently stores a
+    softmax normalization of the mean log-probabilities (so scores happen to
+    lie in [0, 1] and sum to 1.0), but no domain or application logic SHALL
+    interpret score magnitudes as probabilities or confidence.
     """
 
     candidate: Candidate
@@ -22,6 +25,4 @@ class Judgment:
 
     def __post_init__(self) -> None:
         if math.isnan(self.score) or math.isinf(self.score):
-            raise ValueError(
-                f"score must be a finite number, got {self.score!r}"
-            )
+            raise ValueError(f"score must be a finite number, got {self.score!r}")

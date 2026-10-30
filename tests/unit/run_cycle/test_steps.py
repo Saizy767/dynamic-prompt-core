@@ -804,9 +804,7 @@ def test_refine_theses_step_without_teacher_returns_none(build_mock_deps):
     )
 
     deps = build_mock_deps(teacher=None)
-    merged = asyncio.run(
-        refine_theses_step("results.jsonl", "test-run", "v1", deps, "config.toml")
-    )
+    merged = asyncio.run(refine_theses_step("results.jsonl", "test-run", "v1", deps, "config.toml"))
     assert merged is None
 
 
@@ -818,8 +816,16 @@ def test_update_thesis_collection_uses_refined_rows(tmp_path):
     )
 
     results_path = str(tmp_path / "results_test-run_v1_dev_20260101T000000Z.jsonl")
-    refined_rows = [{"id": 1, "true_label": 1, "theses_norm": ["t1"], "theses_raw": ["t1"],
-                     "extract_status": "ok", "classify_status": "ok"}]
+    refined_rows = [
+        {
+            "id": 1,
+            "true_label": 1,
+            "theses_norm": ["t1"],
+            "theses_raw": ["t1"],
+            "extract_status": "ok",
+            "classify_status": "ok",
+        }
+    ]
     with (
         patch(f"{STEPS}.ThesisAnalyzerConfig.from_config", return_value=MagicMock()),
         patch(
@@ -862,9 +868,7 @@ def test_active_holdout_failure_is_retried(
         "f1": {"macro": 0.5, "minority": 0.5, "weighted": 0.5},
     }
 
-    flaky_holdout = AsyncMock(
-        side_effect=[RuntimeError("server hiccup"), holdout_metrics]
-    )
+    flaky_holdout = AsyncMock(side_effect=[RuntimeError("server hiccup"), holdout_metrics])
 
     with ExitStack() as stack:
         stack.enter_context(patch(f"{STEPS}.BaselineRunner", return_value=mock_runner))
@@ -875,9 +879,7 @@ def test_active_holdout_failure_is_retried(
                 return_value=("thesis.json", "clusters.json"),
             )
         )
-        stack.enter_context(
-            patch(f"{STEPS}.select_candidates", return_value=("cands.json", []))
-        )
+        stack.enter_context(patch(f"{STEPS}.select_candidates", return_value=("cands.json", [])))
         stack.enter_context(patch(f"{STEPS}.run_holdout", flaky_holdout))
         stack.enter_context(
             patch(f"{STEPS}.PromptComposerConfig.from_config", return_value=MagicMock(max_rules=10))
@@ -922,9 +924,7 @@ def test_active_holdout_persistent_failure_raises(
                 return_value=("thesis.json", "clusters.json"),
             )
         )
-        stack.enter_context(
-            patch(f"{STEPS}.select_candidates", return_value=("cands.json", []))
-        )
+        stack.enter_context(patch(f"{STEPS}.select_candidates", return_value=("cands.json", [])))
         stack.enter_context(patch(f"{STEPS}.run_holdout", failing_holdout))
 
         with pytest.raises(CycleOrchestratorError, match="holdout baseline unavailable"):
@@ -1000,9 +1000,7 @@ def test_run_round_skips_candidate_rejected_by_limits(
                 return_value="new_results.jsonl",
             )
         )
-        stack.enter_context(
-            patch(f"{STEPS}.decide", side_effect=[("accept", "improved")])
-        )
+        stack.enter_context(patch(f"{STEPS}.decide", side_effect=[("accept", "improved")]))
         stack.enter_context(
             patch(f"{STEPS}.PromptComposerConfig.from_config", return_value=mock_pc_config)
         )

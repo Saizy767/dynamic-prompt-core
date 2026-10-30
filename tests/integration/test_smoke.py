@@ -9,6 +9,7 @@ Run:
 
 Exit code 0 on success, non-zero on any failure.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -61,16 +62,14 @@ def _load_config(config_path: str) -> dict:
         return tomllib.load(f)
 
 
-async def probe_structured_mode(
-    endpoint: str, model_name: str
-) -> str:
+async def probe_structured_mode(endpoint: str, model_name: str) -> str:
     """Probe whether the server accepts json_schema, fall back to json_object."""
     url = endpoint.rstrip("/") + "/chat/completions"
     payload = {
         "model": model_name,
         "messages": [
             {"role": "system", "content": "Return a JSON object."},
-            {"role": "user", "content": "Return {\"x\": 1}"},
+            {"role": "user", "content": 'Return {"x": 1}'},
         ],
         "max_tokens": 32,
         "temperature": 0.0,
@@ -113,10 +112,23 @@ def verify_log(log_path: str, min_entries: int) -> bool:
         return False
 
     required_fields = {
-        "timestamp", "run_id", "call_type", "system_prompt_hash",
-        "text_hash", "model_name", "params", "raw_content",
-        "latency_ms", "finish_reason", "usage", "status",
-        "parse_status", "attempts", "http_status", "error", "truncated",
+        "timestamp",
+        "run_id",
+        "call_type",
+        "system_prompt_hash",
+        "text_hash",
+        "model_name",
+        "params",
+        "raw_content",
+        "latency_ms",
+        "finish_reason",
+        "usage",
+        "status",
+        "parse_status",
+        "attempts",
+        "http_status",
+        "error",
+        "truncated",
     }
 
     entries = []
@@ -160,8 +172,7 @@ async def run_smoke_test(config_path: str, endpoint: str) -> int:
     print("--- Structured mode probe ---")
     mode = await probe_structured_mode(endpoint, served_model_name)
     structured_mode = (
-        StructuredMode.JSON_SCHEMA if mode == "json_schema"
-        else StructuredMode.JSON_OBJECT
+        StructuredMode.JSON_SCHEMA if mode == "json_schema" else StructuredMode.JSON_OBJECT
     )
 
     # Create AsyncTask
@@ -189,7 +200,9 @@ async def run_smoke_test(config_path: str, endpoint: str) -> int:
         print("--- extract_theses call ---")
         try:
             result = await task.extract_theses(
-                session, SAMPLE_TEXT, ExtractResult,
+                session,
+                SAMPLE_TEXT,
+                ExtractResult,
                 system_prompt=EXTRACT_SYSTEM_PROMPT,
             )
             if result is None:
@@ -208,15 +221,15 @@ async def run_smoke_test(config_path: str, endpoint: str) -> int:
         print("--- analyze_raw composition check ---")
         try:
             raw = await task.analyze_raw(
-                session, SAMPLE_TEXT, ExtractResult,
+                session,
+                SAMPLE_TEXT,
+                ExtractResult,
                 system_prompt=EXTRACT_SYSTEM_PROMPT,
                 max_tokens=512,
                 truncate_tokens=2000,
             )
             if raw.status != ResponseStatus.OK:
-                failures.append(
-                    f"analyze_raw status={raw.status.value}"
-                )
+                failures.append(f"analyze_raw status={raw.status.value}")
                 print(f"[FAIL] analyze_raw status={raw.status.value}")
             elif not isinstance(raw.content, str):
                 failures.append("analyze_raw content is not a string")
@@ -224,7 +237,9 @@ async def run_smoke_test(config_path: str, endpoint: str) -> int:
             else:
                 parsed = ExtractResult.model_validate_json(raw.content)
                 composed = await task.analyze(
-                    session, SAMPLE_TEXT, ExtractResult,
+                    session,
+                    SAMPLE_TEXT,
+                    ExtractResult,
                     call_type="extract_theses",
                     system_prompt=EXTRACT_SYSTEM_PROMPT,
                     max_tokens=512,
@@ -233,8 +248,10 @@ async def run_smoke_test(config_path: str, endpoint: str) -> int:
                 if composed is not None and parsed.theses == composed.theses:
                     print("[OK] analyze_raw composition verified")
                 else:
-                    print("[WARN] analyze_raw parsed but analyze returned None "
-                          "(may indicate parse issue)")
+                    print(
+                        "[WARN] analyze_raw parsed but analyze returned None "
+                        "(may indicate parse issue)"
+                    )
         except Exception as exc:
             failures.append(f"analyze_raw raised: {exc}")
             print(f"[FAIL] analyze_raw raised: {exc}")
@@ -243,11 +260,15 @@ async def run_smoke_test(config_path: str, endpoint: str) -> int:
         print("--- determinism check ---")
         try:
             r1 = await task.extract_theses(
-                session, SAMPLE_TEXT, ExtractResult,
+                session,
+                SAMPLE_TEXT,
+                ExtractResult,
                 system_prompt=EXTRACT_SYSTEM_PROMPT,
             )
             r2 = await task.extract_theses(
-                session, SAMPLE_TEXT, ExtractResult,
+                session,
+                SAMPLE_TEXT,
+                ExtractResult,
                 system_prompt=EXTRACT_SYSTEM_PROMPT,
             )
             if r1 is not None and r2 is not None:
@@ -255,11 +276,7 @@ async def run_smoke_test(config_path: str, endpoint: str) -> int:
                     print("[OK] determinism verified (identical results)")
                 else:
                     failures.append("determinism check failed")
-                    print(
-                        f"[FAIL] Results differ: "
-                        f"r1={r1.theses} "
-                        f"r2={r2.theses}"
-                    )
+                    print(f"[FAIL] Results differ: r1={r1.theses} r2={r2.theses}")
             else:
                 print("[WARN] extract_theses returned None, skipping determinism")
         except Exception as exc:
@@ -270,7 +287,9 @@ async def run_smoke_test(config_path: str, endpoint: str) -> int:
         print("--- truncation check ---")
         try:
             await task.extract_theses(
-                session, LONG_TEXT, ExtractResult,
+                session,
+                LONG_TEXT,
+                ExtractResult,
                 system_prompt=EXTRACT_SYSTEM_PROMPT,
                 truncate_tokens=50,
             )
@@ -311,11 +330,13 @@ def main(argv: list[str] | None = None) -> None:
         description="Smoke test for the LLM transport layer (Stage 0)."
     )
     parser.add_argument(
-        "--config", default=DEFAULT_CONFIG_PATH,
+        "--config",
+        default=DEFAULT_CONFIG_PATH,
         help="Path to config.toml",
     )
     parser.add_argument(
-        "--endpoint", default=None,
+        "--endpoint",
+        default=None,
         help="Server endpoint (default: from config)",
     )
     args = parser.parse_args(argv)

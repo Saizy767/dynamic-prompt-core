@@ -101,7 +101,12 @@ SHALL mean stronger model-backed support for the candidate. The domain SHALL
 NOT assume the score is a probability, a confidence value, a calibrated
 likelihood, statistically calibrated, or comparable across different models.
 The score SHALL NOT be assumed directly suitable for a threshold without a
-later policy.
+later policy. The infrastructure MAY store a monotone normalization of the
+ranking signals (e.g., softmax across candidate mean log-probabilities) as
+judgment scores; the domain contract remains that only the ORDER of scores
+carries meaning — any monotone transform of the ranking signal satisfies the
+contract, and no domain or application logic SHALL interpret score magnitudes
+as probabilities or confidence.
 
 #### Scenario: Higher score means stronger support
 - **WHEN** two judgments for the same input have scores `a > b`
@@ -109,11 +114,15 @@ later policy.
 
 #### Scenario: Score is not a probability
 - **WHEN** a judgment score is interpreted
-- **THEN** it is not assumed to be a probability, confidence value, or calibrated likelihood
+- **THEN** only its order is meaningful; magnitudes are not assumed to be probabilities, confidence values, or calibrated likelihoods
 
 #### Scenario: No probability constraint imposed
 - **WHEN** a judgment is created with a score outside `[0, 1]`
 - **THEN** the score is accepted provided it is a valid finite numeric value
+
+#### Scenario: Monotone normalization permitted
+- **WHEN** the infrastructure stores softmax-normalized scores instead of raw mean log-probabilities
+- **THEN** the domain contract is satisfied because the candidate ordering is unchanged
 
 ### Requirement: Score validity
 The score SHALL have a well-defined numeric representation. The implementation

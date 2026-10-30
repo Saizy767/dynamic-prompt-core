@@ -5,6 +5,7 @@ scoring backend — and carries the connection parameters needed to construct
 the scoring adapters.  This extends the existing configuration mechanism
 rather than introducing a separate config file.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -38,29 +39,21 @@ class ScorerBackendConfig:
     def __post_init__(self) -> None:
         if self.backend not in VALID_SCORER_BACKENDS:
             raise ConfigError(
-                f"Invalid scorer backend {self.backend!r}; "
-                f"must be one of {VALID_SCORER_BACKENDS}"
+                f"Invalid scorer backend {self.backend!r}; must be one of {VALID_SCORER_BACKENDS}"
             )
         if self.backend == "llama_server":
             if self.llama_server is None:
-                object.__setattr__(
-                    self, "llama_server", LlamaServerParams()
-                )
+                object.__setattr__(self, "llama_server", LlamaServerParams())
             assert self.llama_server is not None
             ls = self.llama_server
             if not ls.endpoint.startswith(("http://", "https://")):
                 raise ConfigError(
-                    f"invalid endpoint {ls.endpoint!r}; "
-                    f"must start with 'http://' or 'https://'"
+                    f"invalid endpoint {ls.endpoint!r}; must start with 'http://' or 'https://'"
                 )
             if ls.timeout <= 0:
-                raise ConfigError(
-                    f"invalid timeout {ls.timeout}; must be positive"
-                )
+                raise ConfigError(f"invalid timeout {ls.timeout}; must be positive")
             if ls.max_concurrency <= 0:
-                raise ConfigError(
-                    f"invalid max_concurrency {ls.max_concurrency}; must be positive"
-                )
+                raise ConfigError(f"invalid max_concurrency {ls.max_concurrency}; must be positive")
 
 
 def scorer_backend_config_from_toml(
@@ -92,9 +85,7 @@ def scorer_backend_config_from_toml(
     if not isinstance(model_section, dict):
         return ScorerBackendConfig(
             backend="llama_server",
-            llama_server=LlamaServerParams(
-                gguf_path=gguf_path, max_concurrency=max_concurrency
-            ),
+            llama_server=LlamaServerParams(gguf_path=gguf_path, max_concurrency=max_concurrency),
         )
 
     backend = str(model_section.get("backend", "llama_server"))
@@ -106,14 +97,10 @@ def scorer_backend_config_from_toml(
             endpoint=str(ls_section.get("endpoint", DEFAULT_LLAMA_SERVER_ENDPOINT)),
             timeout=int(ls_section.get("timeout", DEFAULT_LLAMA_SERVER_TIMEOUT)),
             gguf_path=gguf_path,
-            max_concurrency=int(
-                ls_section.get("max_concurrency", max_concurrency)
-            ),
+            max_concurrency=int(ls_section.get("max_concurrency", max_concurrency)),
         )
     elif backend == "llama_server":
-        llama_server = LlamaServerParams(
-            gguf_path=gguf_path, max_concurrency=max_concurrency
-        )
+        llama_server = LlamaServerParams(gguf_path=gguf_path, max_concurrency=max_concurrency)
 
     return ScorerBackendConfig(
         backend=backend,

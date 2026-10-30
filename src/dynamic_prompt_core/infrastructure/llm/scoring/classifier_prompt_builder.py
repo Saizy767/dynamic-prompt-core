@@ -4,6 +4,7 @@ Adapted from ``ScoringPromptBuilder`` to accept a loaded system prompt as the
 initial prefix instead of a hardcoded constant.  The rules formatting,
 candidate building, and prefix structure are preserved.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence

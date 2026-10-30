@@ -5,6 +5,7 @@ This module is framework-free: it uses only the Python standard library.
 domain so both the port and the infrastructure adapter can import it without
 creating a layer cycle.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -73,9 +74,7 @@ def apply_refinement(
 
     for drop_item in plan.drop:
         if filter_noisy or filter_interpretive:
-            filtered_out.append(
-                {"thesis": drop_item.thesis, "reason": drop_item.reason}
-            )
+            filtered_out.append({"thesis": drop_item.thesis, "reason": drop_item.reason})
         else:
             theses_refined.append(drop_item.thesis)
 

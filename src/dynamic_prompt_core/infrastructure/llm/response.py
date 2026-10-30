@@ -1,4 +1,5 @@
 """Response dataclasses and status enums for the LLM transport layer."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ class RawResponse:
 @dataclass
 class CallResult:
     """Rich result bundling parsed model, raw content, latency, and parse status."""
+
     parsed: BaseModel | None
     raw_content: str | None
     latency_ms: float

@@ -100,15 +100,15 @@ behavior: `Classification.selected.value` is cast to `int` to produce
 - **THEN** `predicted_decision == None`
 
 ### Requirement: Candidate configuration is cycle-wide
-The test suite SHALL verify that the candidate set has one source of truth
-supplied through `RunCycleDeps`. The `Classifier` SHALL receive candidates from
-`RunCycleDeps` at construction time. No `BaselineRunner` construction inside
-`run_cycle` SHALL supply a `candidates=` argument other than `deps.candidates`.
+The test suite SHALL verify that the candidate set has one source of truth:
+the composition root constructs the candidate tuple once and supplies it to
+both the `Classifier` (at its construction) and `RunCycleDeps` (at the cycle's
+construction). No `BaselineRunner` construction inside `run_cycle` SHALL
+supply a `candidates=` argument other than `deps.candidates`.
 
-#### Scenario: Classifier candidates come from deps
-- **WHEN** an optimization step constructs a `Classifier` or `BaselineRunner`
-- **THEN** the candidates are derived from `deps.candidates` and not from a
-  step-local construction
+#### Scenario: Classifier candidates come from the composition root
+- **WHEN** the composition root wires the cycle
+- **THEN** the `Classifier` and `RunCycleDeps` receive the same candidate tuple constructed once in the composition root
 
 #### Scenario: No step-local candidate override
 - **WHEN** `BaselineRunner(...)` construction calls in `run_cycle` are inspected

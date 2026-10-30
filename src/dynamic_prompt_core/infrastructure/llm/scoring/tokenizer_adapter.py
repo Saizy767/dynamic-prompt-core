@@ -7,6 +7,7 @@ concrete tokenizer library.  ``HuggingFaceTokenizerAdapter`` wraps
 The ``BatchTokenizerAdapter`` protocol extends tokenization to padded batches
 with per-item candidate-token boundaries, enabling batched model inference.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

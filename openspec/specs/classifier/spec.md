@@ -50,17 +50,21 @@ representation; the decision is produced inside the `Classifier`.
 - **THEN** the operation is asynchronous, consistent with existing outbound ports
 
 ### Requirement: Classifier encapsulates the full classification process
-The `Classifier` implementation SHALL be solely responsible for: validating the
-input rule set, working with candidates, forming the input for logit-based
-scoring, obtaining and processing scores, determining the final decision, and
-returning the result as the existing `Classification` type. The implementation
-SHALL absorb the responsibilities previously held by `CandidateScorer` and
-`ClassificationPolicy` as separate abstractions. `BaselineRunner` SHALL NOT
-directly use scoring details, candidate evaluation, or decision logic.
+The `Classifier` implementation SHALL be solely responsible for: working with
+candidates, forming the input for logit-based scoring, obtaining and processing
+scores, determining the final decision, and returning the result as the
+existing `Classification` type. Rule-set validation is upstream's
+responsibility: `ClassificationRules` is produced by a validating constructor
+(`classification_rules_from_artifact`) and the composer enforces the rule-count
+limit at compose time; the classifier SHALL trust the `ClassificationRules` it
+receives. The implementation SHALL absorb the responsibilities previously held
+by `CandidateScorer` and `ClassificationPolicy` as separate abstractions.
+`BaselineRunner` SHALL NOT directly use scoring details, candidate evaluation,
+or decision logic.
 
-#### Scenario: Validation at classifier boundary
+#### Scenario: Rules trusted at classifier boundary
 - **WHEN** the classifier receives rules
-- **THEN** it validates the rule set before proceeding with scoring
+- **THEN** it proceeds with scoring without re-validating the rule set (validation happened upstream)
 
 #### Scenario: Scoring and decision are internal
 - **WHEN** the classifier processes an input
@@ -130,8 +134,10 @@ The `Classifier` SHALL preserve the existing error-handling policy: failures at
 tokenization, model inference, and logit scoring SHALL propagate as a
 classification error. The `Classifier` SHALL NOT silently substitute a `0`
 classification or produce fake classifications on error. Errors SHALL be
-distinguishable from the absent-rules case (which sets classification to `0`
-without calling the `Classifier`). No partial results SHALL be returned.
+distinguishable from the absent-layers case (a layerless active prompt sets
+classification to `0` without calling the `Classifier`; an empty rules list is
+NOT an error and reaches the `Classifier` as a zero-shot baseline). No partial
+results SHALL be returned.
 
 #### Scenario: Scoring failure propagates error
 - **WHEN** a model inference failure occurs during classification

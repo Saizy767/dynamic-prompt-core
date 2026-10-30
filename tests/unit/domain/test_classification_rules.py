@@ -1,4 +1,5 @@
 """Unit tests for the ClassificationRules domain model."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -50,23 +51,28 @@ class TestClassificationRulesFromArtifact:
         assert rules.rules == ()
 
     def test_empty_rules_list_produces_empty(self) -> None:
-        layers = PromptLayer(
-            role="r", task="t", rules=[], output_contract="o", fallback="f"
-        )
+        layers = PromptLayer(role="r", task="t", rules=[], output_contract="o", fallback="f")
         rules = classification_rules_from_artifact(self._make_artifact(layers))
         assert rules.rules == ()
 
     def test_non_string_element_raises(self) -> None:
         layers = PromptLayer(
-            role="r", task="t", rules=["a", 42], output_contract="o", fallback="f"  # type: ignore[list-item]
+            role="r",
+            task="t",
+            rules=["a", 42],
+            output_contract="o",
+            fallback="f",  # type: ignore[list-item]
         )
         with pytest.raises(TypeError):
             classification_rules_from_artifact(self._make_artifact(layers))
 
     def test_order_and_text_preserved(self) -> None:
         layers = PromptLayer(
-            role="r", task="t", rules=["rule C", "rule A", "rule B"],
-            output_contract="o", fallback="f",
+            role="r",
+            task="t",
+            rules=["rule C", "rule A", "rule B"],
+            output_contract="o",
+            fallback="f",
         )
         rules = classification_rules_from_artifact(self._make_artifact(layers))
         assert rules.rules == ("rule C", "rule A", "rule B")

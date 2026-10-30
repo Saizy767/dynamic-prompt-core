@@ -1,4 +1,5 @@
 """Domain errors for dataset operations."""
+
 from __future__ import annotations
 
 

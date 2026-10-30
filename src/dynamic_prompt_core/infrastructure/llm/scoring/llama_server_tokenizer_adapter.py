@@ -9,6 +9,7 @@ Using the server's tokenizer ensures token IDs match exactly what the model
 uses for inference, avoiding potential BPE/SentencePiece mismatch between a
 local HuggingFace tokenizer and the GGUF model's internal tokenizer.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -74,7 +75,8 @@ class LlamaServerBatchTokenizerAdapter:
                 last_exc = exc
                 log.warning(
                     "llama-server tokenize disconnected (attempt %d/%d), retrying",
-                    attempt + 1, _MAX_RETRIES,
+                    attempt + 1,
+                    _MAX_RETRIES,
                 )
                 await self._safe_close_session()
                 await asyncio.sleep(_RETRY_DELAY_S)
@@ -82,7 +84,8 @@ class LlamaServerBatchTokenizerAdapter:
                 last_exc = exc
                 log.warning(
                     "llama-server tokenize connection error (attempt %d/%d), retrying",
-                    attempt + 1, _MAX_RETRIES,
+                    attempt + 1,
+                    _MAX_RETRIES,
                 )
                 await self._safe_close_session()
                 await asyncio.sleep(_RETRY_DELAY_S)
@@ -91,9 +94,7 @@ class LlamaServerBatchTokenizerAdapter:
             f"llama-server tokenize failed after {_MAX_RETRIES} retries: {last_exc}"
         ) from last_exc
 
-    async def _do_tokenize_request(
-        self, payload: dict[str, Any]
-    ) -> list[int]:
+    async def _do_tokenize_request(self, payload: dict[str, Any]) -> list[int]:
         """Execute a single tokenize HTTP request."""
         session = self._get_session()
         try:
@@ -123,9 +124,7 @@ class LlamaServerBatchTokenizerAdapter:
         except LLMScoringError:
             raise
         except Exception as exc:
-            raise LLMScoringError(
-                f"llama-server tokenize request failed: {exc}"
-            ) from exc
+            raise LLMScoringError(f"llama-server tokenize request failed: {exc}") from exc
 
         tokens = body.get("tokens")
         if not isinstance(tokens, list):
@@ -165,16 +164,10 @@ class LlamaServerBatchTokenizerAdapter:
 
         try:
             unique_prefixes = dict.fromkeys(prefixes)
-            prefix_token_cache = await asyncio.gather(
-                *(self._tokenize(p) for p in unique_prefixes)
-            )
-            prefix_ids_by_prefix = dict(
-                zip(unique_prefixes, prefix_token_cache, strict=True)
-            )
+            prefix_token_cache = await asyncio.gather(*(self._tokenize(p) for p in unique_prefixes))
+            prefix_ids_by_prefix = dict(zip(unique_prefixes, prefix_token_cache, strict=True))
 
-            async def _encode_pair(
-                prefix: str, candidate: str
-            ) -> tuple[list[int], int, list[int]]:
+            async def _encode_pair(prefix: str, candidate: str) -> tuple[list[int], int, list[int]]:
                 full_ids = await self._tokenize(prefix + candidate)
                 prefix_ids = prefix_ids_by_prefix[prefix]
 

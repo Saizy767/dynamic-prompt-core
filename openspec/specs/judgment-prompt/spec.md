@@ -71,24 +71,24 @@ continuation positions structurally.
 - **THEN** the boundary between the prefix and the candidate continuation is explicitly exposed to the tokenizer
 
 ### Requirement: Semantic classification criteria preserved
-The judgment prompt SHALL include semantic instructions from the existing
-classification task that define what constitutes a good classification. These
-include instructions describing what the classification represents, what makes
-a candidate relevant, how ambiguous cases should be interpreted, how similar
-intents should be distinguished, and what evidence in the input matters. These
-semantic instructions SHALL be preserved in the judgment prompt because they
-remain relevant to candidate evaluation.
+The judgment prompt SHALL carry the semantic classification criteria that
+define what constitutes a good classification as the active classification
+rules supplied by the application: the prompt's rules section contains the
+active rule texts, and the fixed prompt frame instructs the model to evaluate
+how well the candidate matches the input text according to those rules. A
+hardcoded semantic prefix SHALL NOT replace the active rules.
 
-#### Scenario: Task semantics preserved
-- **WHEN** the existing classification prompt contains instructions describing what the classification represents
-- **THEN** those instructions are preserved in the judgment prompt
+#### Scenario: Active rules carried as criteria
+- **WHEN** the application supplies active classification rules
+- **THEN** the judgment prompt's rules section contains those rule texts
 
-#### Scenario: Relevance criteria preserved
-- **WHEN** the existing classification prompt contains instructions describing what makes- **THEN** those instructions are preserved in the judgment prompt
+#### Scenario: No hardcoded semantic prefix
+- **WHEN** the prompt builder is inspected
+- **THEN** semantic criteria come from the active rules, not from a hardcoded prefix
 
-#### Scenario: Disambiguation criteria preserved
-- **WHEN** the existing classification prompt contains instructions describing how similar intents should be distinguished
-- **THEN** those instructions are preserved in the judgment prompt
+#### Scenario: Empty rules render empty section
+- **WHEN** the active rules list is empty (zero-shot baseline)
+- **THEN** the judgment prompt is built with an empty rules section
 
 ### Requirement: Generation-protocol instructions excluded
 The judgment prompt SHALL NOT contain instructions that exist solely to control
@@ -206,9 +206,9 @@ task framing, not the input content.
 ### Requirement: Prompt construction remains in infrastructure
 The judgment prompt SHALL be constructed inside the infrastructure layer. The
 application SHALL NOT construct prompts, provide prompt fragments, or provide
-prompt templates. The application continues to call `CandidateScorer.score(text,
-candidates)` with semantic data only. The dependency direction remains
-`application` → `CandidateScorer` → `LLMLogitCandidateScorer` → prompt builder
+prompt templates. The application continues to call `Classifier.classify(text,
+rules)` with semantic data only. The dependency direction remains
+`application` → `Classifier` → `LLMLogitClassifier` → prompt builder
 → tokenizer/model adapter. The application remains unaware of prompt strings,
 token boundaries, candidate continuation positions, tokenizer behavior, logits,
 or model-specific prompt formatting.
@@ -218,11 +218,11 @@ or model-specific prompt formatting.
 - **THEN** the construction occurs inside the infrastructure layer
 
 #### Scenario: Application provides semantic data only
-- **WHEN** the application invokes the scorer
-- **THEN** it provides text and candidates, not prompt fragments or prompt templates
+- **WHEN** the application invokes the classifier
+- **THEN** it provides text and rules, not prompt fragments or prompt templates
 
 #### Scenario: Application unaware of prompt internals
-- **WHEN** the application invokes the scorer
+- **WHEN** the application invokes the classifier
 - **THEN** it is unaware of prompt strings, token boundaries, candidate continuation positions, tokenizer behavior, logits, or model-specific formatting
 
 ### Requirement: Prompt construction separate from scoring
@@ -244,35 +244,39 @@ allows prompt behavior to be tested independently from model execution.
 - **THEN** it does not calculate log-probabilities or produce judgments
 
 ### Requirement: Prompt compatible with batch scoring
-The judgment prompt SHALL work with the existing batch-scoring architecture.
-For one `score(text, candidates)` invocation, the scorer SHALL construct one
-judgment prompt per candidate and process them through the existing batch
-tokenization and batched model inference path. The prompt SHALL NOT
-reintroduce per-candidate model execution. The scoring batch, model batch, and
-chunk distinction established by the batch scoring design SHALL remain
-preserved.
+The judgment prompt SHALL work with the model-seam batch architecture. For one
+`classify(text, rules)` invocation, the classifier SHALL construct one judgment
+prompt per constructor candidate and process them through one `forward_batch`
+call on the model seam. The prompt SHALL NOT reintroduce per-candidate scoring
+invocations at the application contract level. How the seam physically executes
+the batch is a backend detail (the llama-server backend issues concurrent
+per-candidate-token HTTP requests).
 
 #### Scenario: One prompt per candidate in batch
-- **WHEN** the scorer evaluates `score(text, [A, B, C])`
-- **THEN** three judgment prompts are constructed and processed through the batch path
+- **WHEN** the classifier evaluates constructor candidates `[A, B, C]`
+- **THEN** three judgment prompts are constructed and processed through one `forward_batch` call
 
-#### Scenario: No per-candidate model execution
-- **WHEN** the scorer evaluates multiple candidates
-- **THEN** the judgment prompts are processed through batched model inference, not one model call per candidate
+#### Scenario: Application sees one invocation
+- **WHEN** the classifier evaluates multiple candidates
+- **THEN** the application contract is a single `classify` call regardless of the backend's execution strategy
 
 ### Requirement: Prompt does not change scoring algorithm
-The judgment prompt SHALL NOT change the scoring algorithm. The existing mean
-candidate-token log-probability SHALL remain unchanged. The prompt changes only
-the contextual framing of the candidate. The prompt SHALL NOT introduce
-candidate-level softmax, confidence normalization, calibration, temperature
-scaling, generated explanations, or generated JSON.
+The judgment prompt SHALL NOT change the scoring algorithm. The ranking signal
+SHALL remain the mean candidate-token log-probability of the candidate
+continuation. The prompt changes only the contextual framing of the candidate.
+The classifier MAY additionally store a monotone normalization of the ranking
+signals (softmax across candidate mean log-probabilities) as judgment scores;
+such normalization SHALL NOT change the ranking, the selected candidate, or
+the mean log-probability computation itself. The prompt SHALL NOT introduce
+confidence calibration, temperature scaling, generated explanations, or
+generated JSON.
 
 #### Scenario: Scoring algorithm unchanged
 - **WHEN** the judgment prompt is used with the logit scorer
-- **THEN** the score remains the mean candidate-token log-probability
+- **THEN** the ranking signal remains the mean candidate-token log-probability
 
-#### Scenario: No cross-candidate normalization introduced
-- **WHEN** the judgment prompt is used with multiple candidates
-- **THEN** no softmax, normalization, calibration, or temperature scaling is introduced across candidates
+#### Scenario: Normalization does not change ranking
+- **WHEN** softmax normalization is stored as judgment scores
+- **THEN** the selected candidate and the candidate ordering are identical to those derived from the raw mean log-probabilities
 
 

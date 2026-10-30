@@ -38,6 +38,7 @@ def _write_config(tmp_path, body: str) -> str:
 def _run_main(argv: list[str]) -> MagicMock:
     deps = MagicMock()
     deps.classifier.aclose = AsyncMock()
+    deps.llm_client.aclose = AsyncMock()
     result = RunCycleResult(
         total_cycles=0,
         stop_reason="max_cycles_reached",

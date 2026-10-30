@@ -19,10 +19,14 @@ from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
 )
 from dynamic_prompt_core.application.use_cases.run_cycle.state import CycleState
 from dynamic_prompt_core.domain.prompts.base import PromptArtifact, PromptLayer
+from dynamic_prompt_core.infrastructure.data.writer import FileDatasetRepository
 
 
 class _StubRunRepository:
     def save_results(self, results: list[dict[str, Any]], run_id: str, path: str) -> str:
+        return path
+
+    def save_artifact(self, path: str, payload: str) -> str:
         return path
 
     def load_results(self, path: str) -> list[dict[str, Any]]:
@@ -124,6 +128,7 @@ def test_stop_criteria_deps_optional():
         normalizer=MockNormalizer(),
         classifier=FakeClassifier(),
         extractor=FakeExtractor(),
+        dataset_repository=FileDatasetRepository(),
         candidates=FAKE_CANDIDATES,
     )
     assert deps.stop_criteria_deps is None
@@ -152,6 +157,7 @@ def test_stop_criteria_deps_provided():
         normalizer=MockNormalizer(),
         classifier=FakeClassifier(),
         extractor=FakeExtractor(),
+        dataset_repository=FileDatasetRepository(),
         candidates=FAKE_CANDIDATES,
         stop_criteria_deps=stop_deps,
     )

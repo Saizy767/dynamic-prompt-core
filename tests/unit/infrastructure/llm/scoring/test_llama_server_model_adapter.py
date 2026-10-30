@@ -1,4 +1,5 @@
 """Unit tests for the llama-server HTTP model adapter (logit_bias forcing)."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -163,9 +164,7 @@ class TestForcedTokenScoring:
 
     async def test_empty_batch(self) -> None:
         adapter, session = _make_adapter([])
-        result = await adapter.forward_batch(
-            [], [], prefix_token_counts=[], candidate_token_ids=[]
-        )
+        result = await adapter.forward_batch([], [], prefix_token_counts=[], candidate_token_ids=[])
         assert result.items == ()
         assert session.post_calls == []
 
@@ -196,9 +195,7 @@ class TestResponseValidation:
             )
 
     async def test_nan_logprob_rejected(self) -> None:
-        adapter, _ = _make_adapter(
-            [_MockResponse(200, _completion_response(16, float("nan")))]
-        )
+        adapter, _ = _make_adapter([_MockResponse(200, _completion_response(16, float("nan")))])
         with pytest.raises(LLMScoringError, match="NaN"):
             await adapter.forward_batch(
                 [[1, 2, 3, 16]],
@@ -218,9 +215,7 @@ class TestResponseValidation:
             )
 
     async def test_missing_logprobs_rejected(self) -> None:
-        adapter, _ = _make_adapter(
-            [_MockResponse(200, {"choices": [{"index": 0}]})]
-        )
+        adapter, _ = _make_adapter([_MockResponse(200, {"choices": [{"index": 0}]})])
         with pytest.raises(LLMScoringError, match="missing logprobs"):
             await adapter.forward_batch(
                 [[1, 2, 3, 16]],
@@ -230,9 +225,7 @@ class TestResponseValidation:
             )
 
     async def test_missing_content_rejected(self) -> None:
-        adapter, _ = _make_adapter(
-            [_MockResponse(200, {"choices": [{"logprobs": {}}]})]
-        )
+        adapter, _ = _make_adapter([_MockResponse(200, {"choices": [{"logprobs": {}}]})])
         with pytest.raises(LLMScoringError, match="missing logprobs content"):
             await adapter.forward_batch(
                 [[1, 2, 3, 16]],
@@ -253,9 +246,7 @@ class TestResponseValidation:
 
 
 class TestRetries:
-    async def test_transient_disconnect_retried(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_transient_disconnect_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
         adapter, session = _make_adapter(
             [
                 aiohttp.ServerDisconnectedError("boom"),
@@ -273,12 +264,8 @@ class TestRetries:
         score = LogitScorer().score(3, [16], result.items[0])
         assert score == pytest.approx(-2.0, abs=1e-9)
 
-    async def test_retries_exhausted_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        adapter, session = _make_adapter(
-            [aiohttp.ServerDisconnectedError("boom")] * 3
-        )
+    async def test_retries_exhausted_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        adapter, session = _make_adapter([aiohttp.ServerDisconnectedError("boom")] * 3)
         monkeypatch.setattr(adapter, "_get_session", lambda: session)
         with pytest.raises(LLMScoringError, match="after 3 retries"):
             await adapter.forward_batch(

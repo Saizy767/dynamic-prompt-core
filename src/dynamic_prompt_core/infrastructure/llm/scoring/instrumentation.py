@@ -16,6 +16,7 @@ or any other user content.  ``eval_ms`` measures only the
 ``eval_logits`` including any lazy materialization triggered by that
 access, so model evaluation is separable from logit access/processing.
 """
+
 from __future__ import annotations
 
 import time

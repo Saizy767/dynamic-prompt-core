@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
+import signal
 import sys
 import tomllib
+from datetime import UTC, datetime
 from typing import Any
 
 from dynamic_prompt_core.application.ports.inbound.run_cycle_input import RunCycleInput
@@ -87,16 +90,21 @@ class _NormalizerAdapter:
         return normalize_theses(theses, lang)
 
 
-def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
+def build_cli_deps(
+    config: dict[str, Any], config_path: str, run_id: str | None = None
+) -> RunCycleDeps:
     """Assemble all dependencies for the run_cycle use case.
 
     This is the composition root: it creates concrete infrastructure
     implementations and passes them through the typed dependency object.
+    When *run_id* is given, every transport request is logged to
+    ``<output_dir>/log_cycle/requests_{run_id}.jsonl``.
     """
     from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
         RunnerConfig,
     )
     from dynamic_prompt_core.domain.models.candidate import Candidate
+    from dynamic_prompt_core.infrastructure.data.writer import FileDatasetRepository
     from dynamic_prompt_core.infrastructure.llm import AsyncTask
     from dynamic_prompt_core.infrastructure.llm.classifier_factory import (
         build_classifier,
@@ -116,10 +124,15 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
     with open(config_path, "rb") as f:
         toml_config = tomllib.load(f)
 
-    llm = AsyncTask(config_path=config_path)
+    request_log_path: str | None = None
+    if run_id:
+        output_dir = config.get("cycle_orchestrator", {}).get("output_dir", "data/results")
+        request_log_path = os.path.join(output_dir, "log_cycle", f"requests_{run_id}.jsonl")
+    llm = AsyncTask(config_path=config_path, log_path=request_log_path, run_id=run_id or "cycle")
     store_config = PromptStoreConfig.from_config(config_path)
     store = init_store(store_config)
     run_repo = FileRunRepository()
+    dataset_repo = FileDatasetRepository()
     normalizer = _NormalizerAdapter()
 
     candidates = tuple(
@@ -168,12 +181,13 @@ def build_cli_deps(config: dict[str, Any], config_path: str) -> RunCycleDeps:
         log.debug("stop criteria not configured: %s", exc)
 
     return RunCycleDeps(
-        llm_client=llm,  # type: ignore[arg-type]
+        llm_client=llm,
         prompt_repository=store,
         run_repository=run_repo,
         normalizer=normalizer,
         classifier=classifier,
         extractor=extractor,
+        dataset_repository=dataset_repo,
         candidates=candidates,
         teacher_llm_client=teacher_llm_client,
         stop_criteria_deps=stop_criteria_deps,
@@ -271,12 +285,19 @@ async def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    deps = build_cli_deps(cfg, config_path)
     cycles = getattr(args, "cycles", None)
     split = getattr(args, "split", None)
     resume_from = getattr(args, "resume", None)
 
     cycle_config = CycleConfig.from_toml(config_path)
+    if not cycle_config.run_id:
+        cycle_config = type(cycle_config)(
+            **{
+                **cycle_config.__dict__,
+                "run_id": f"cycle-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}",
+            }
+        )
+    deps = build_cli_deps(cfg, config_path, run_id=cycle_config.run_id)
     overrides: dict[str, Any] = {}
     if cycles is not None and cycles != cycle_config.max_cycles:
         # A list duration would re-override max_cycles in __post_init__;
@@ -313,6 +334,20 @@ async def main(argv: list[str] | None = None) -> int:
         config=cycle_config,
     )
 
+    def _request_shutdown() -> None:
+        log.info("shutdown signal received; cancelling cycle for clean cleanup")
+        raise asyncio.CancelledError()
+
+    loop = asyncio.get_running_loop()
+    installed_signals: list[signal.Signals] = []
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_shutdown)
+            installed_signals.append(sig)
+        except NotImplementedError:
+            # signal handlers require a running event loop with signal support
+            pass
+
     try:
         result: RunCycleResult = await run_cycle(deps, run_input)
         log.info(
@@ -322,18 +357,19 @@ async def main(argv: list[str] | None = None) -> int:
             result.final_active_version,
         )
         return 0
+    except asyncio.CancelledError:
+        log.warning("Cycle cancelled by signal; state dumps from completed cycles remain on disk.")
+        return 130
     except Exception:
         log.exception("Unrecoverable error during cycle execution.")
         return 1
     finally:
+        for sig in installed_signals:
+            loop.remove_signal_handler(sig)
         close_fn = getattr(deps.classifier, "aclose", None)
         if close_fn is not None:
             await close_fn()
-        from dynamic_prompt_core.infrastructure.llm.teacher_client import (
-            close_session,
-        )
-
-        await close_session()
+        await deps.llm_client.aclose()
 
 
 def cli_entry() -> None:

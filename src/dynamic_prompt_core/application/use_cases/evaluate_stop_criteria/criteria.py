@@ -4,6 +4,7 @@ Each function takes a ``StopEvaluationContext`` and returns the reason string
 when the criterion triggers, or ``None`` when it does not.  The functions are
 pure: they have no side effects and depend only on the context and config.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -67,7 +68,7 @@ def _check_plateau(ctx: StopEvaluationContext) -> str | None:
     if len(values) < window + 1:
         return None
 
-    recent = values[-(window + 1):]
+    recent = values[-(window + 1) :]
     for i in range(1, len(recent)):
         if recent[i] - recent[i - 1] > min_improvement:
             return None
@@ -84,7 +85,7 @@ def _check_degradation(ctx: StopEvaluationContext) -> str | None:
     if len(values) < window + 1:
         return None
 
-    recent = values[-(window + 1):]
+    recent = values[-(window + 1) :]
     for i in range(1, len(recent)):
         if recent[i] >= recent[i - 1]:
             return None
@@ -101,7 +102,7 @@ def _check_stagnation(ctx: StopEvaluationContext) -> str | None:
     if len(history) < window + 1:
         return None
 
-    recent = history[-(window + 1):]
+    recent = history[-(window + 1) :]
     first = recent[0]
     for entry in recent[1:]:
         if entry != first:

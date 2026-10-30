@@ -1,4 +1,5 @@
 """Unit tests for the llama-server HTTP tokenizer adapter."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -142,9 +143,7 @@ class TestLlamaServerBatchTokenizerAdapter:
             await adapter.encode_batch(["a", "b"], ["c"])
 
     async def test_non_200_raises(self) -> None:
-        adapter, _ = self._make_adapter_with_mock(
-            [_MockResponse(400, "bad request")]
-        )
+        adapter, _ = self._make_adapter_with_mock([_MockResponse(400, "bad request")])
         with pytest.raises(LLMScoringError, match="HTTP 400"):
             await adapter.encode_batch(["a"], ["b"])
 

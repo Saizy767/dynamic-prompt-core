@@ -2,211 +2,97 @@
 
 ## Purpose
 
-Load a newly composed prompt version and the currently active prompt version, run
-both on the same dev split, compute comparable metrics, compare by macro-F1 with
-minority-class F1 as tie-breaker, decide to accept or roll back the new version,
-maintain a consecutive-rollback counter, return the next candidate on rollback,
-and persist a reloadable decision artifact with full lineage and changed
-predictions.
+Decide whether a newly composed prompt version should be accepted or rolled
+back, from the holdout metrics of the new version and the active version. The
+comparator is a pure decision component: the cycle orchestrator loads versions,
+runs evaluations, and computes metrics; the comparator only evaluates the
+decision rule.
 
 ## Requirements
 
-### Requirement: Load new prompt version
-The component SHALL load the prompt artifact produced by the composer component,
-containing `version`, `text`, `hash`, `rules`, `source_candidates`, and
-`base_version`. The component SHALL fail with an error naming the missing field
-when the artifact does not conform to the schema.
+### Requirement: Decision evaluation scope
+The component SHALL expose a single decision function over the new version's
+holdout metrics and the active version's holdout metrics. The component SHALL
+NOT load prompt artifacts, run evaluations, or compute metrics — those are the
+cycle orchestrator's responsibilities. The decision SHALL be driven by holdout
+metrics; dev metrics are logged by the orchestrator for visibility and SHALL
+NOT participate in the decision.
 
-#### Scenario: Valid artifact loads
-- **WHEN** the artifact contains all required fields
-- **THEN** the new version is loaded for evaluation
+#### Scenario: Pure decision function
+- **WHEN** the orchestrator has holdout metrics for both versions
+- **THEN** it passes the two metric dicts to the comparator's decision function
 
-#### Scenario: Missing field
-- **WHEN** the artifact is missing `source_candidates`
-- **THEN** loading fails with an error naming the missing field
-
-### Requirement: Load active version
-The component SHALL load the currently active prompt version from the prompt
-store. The active version SHALL be used as the baseline for comparison. The
-component SHALL fail with an error when no active version is found.
-
-#### Scenario: Active version loaded
-- **WHEN** the prompt store contains an active version
-- **THEN** the active version is loaded as the baseline
-
-#### Scenario: No active version
-- **WHEN** the prompt store has no active version
-- **THEN** the component fails with an error naming the missing active version
-
-### Requirement: Run new version on dev
-The component SHALL run the new prompt version on the same dev split used for the
-active version. The run SHALL use the same runner and the same fixed extraction
-prompt as the baseline. The component SHALL produce a results artifact for the
-new version.
-
-#### Scenario: New version run
-- **WHEN** the new version is evaluated
-- **THEN** a results artifact is produced for the new version on dev
-
-#### Scenario: Same extraction prompt
-- **WHEN** the new version is run
-- **THEN** the fixed extraction prompt is used without modification
-
-### Requirement: Compute metrics for new version
-The component SHALL compute the same metrics for the new version as for the
-active version: accuracy, macro-F1, minority-class F1, confusion matrix,
-prediction distribution, and parse-failure count. The metrics SHALL be computed
-by the same stage1-metrics component used for the baseline.
-
-#### Scenario: Metrics computed
-- **WHEN** the new version is evaluated
-- **THEN** accuracy, macro-F1, minority-class F1, confusion matrix, prediction
-  distribution, and parse-failure count are computed
-
-#### Scenario: Metrics comparable
-- **WHEN** metrics are computed for the new version
-- **THEN** they are directly comparable to the active version's metrics on dev
-
-### Requirement: Compare metrics
-The component SHALL compare the new version's metrics against the active
-version's metrics on holdout. The comparison SHALL include accuracy,
-macro-F1, and minority-class F1. The component SHALL report the difference
-for each metric. Holdout metrics SHALL drive the accept/rollback decision.
-Dev metrics SHALL be logged for visibility but SHALL NOT participate in the
-decision.
-
-#### Scenario: Comparison reported
-- **WHEN** the new version is evaluated
-- **THEN** the difference in accuracy, macro-F1, and minority-class F1
-  relative to the active version is reported
-
-#### Scenario: Metrics on holdout
-- **WHEN** metrics are computed on holdout
-- **THEN** they drive the accept/rollback decision
+#### Scenario: Metrics on holdout drive the decision
+- **WHEN** the decision is evaluated
+- **THEN** only holdout metrics participate; dev metrics are logged for visibility
 
 ### Requirement: Decision rule
-The component SHALL decide to accept the new version only when its
-decision metric on holdout is **strictly greater** than the active
-version's. When the decision metric is equal or lower, the component SHALL
-decide to roll back. The tie-breaker metric SHALL NOT be used in the
-decision; it SHALL be logged for visibility only.
+The component SHALL decide to accept the new version when its decision metric
+on holdout is **strictly greater** than the active version's. When the decision
+metric is **equal**, the component SHALL accept only when the tie-breaker
+metric is strictly higher than the active version's; otherwise it SHALL decide
+to roll back. When the decision metric is **lower**, the component SHALL decide
+to roll back.
 
 #### Scenario: Accept on improvement
 - **WHEN** the new version's holdout decision metric is strictly higher than
   the active version's
 - **THEN** the new version is accepted
 
-#### Scenario: Accept on tie
+#### Scenario: Accept on tie with tie-breaker improvement
 - **WHEN** the new version's holdout decision metric equals the active
-  version's
-- **THEN** the new version is rolled back (strict improvement required; a
-  tie is not sufficient)
+  version's and the tie-breaker metric is strictly higher
+- **THEN** the new version is accepted
 
-#### Scenario: Rollback on degradation
-- **WHEN** the new version's holdout decision metric is lower than the
-  active version's
+#### Scenario: Rollback on tie without tie-breaker improvement
+- **WHEN** the new version's holdout decision metric equals the active
+  version's and the tie-breaker metric is equal or lower
 - **THEN** the new version is rolled back
 
-### Requirement: Next candidate on rollback
-The component SHALL return the next candidate from the candidate queue when a
-version is rolled back. The component SHALL NOT reuse the rejected version's
-rules for the next attempt.
+#### Scenario: Rollback on degradation
+- **WHEN** the new version's holdout decision metric is lower than the active
+  version's
+- **THEN** the new version is rolled back
 
-#### Scenario: Next candidate returned
+### Requirement: Rollback semantics in the cycle
+On rollback the cycle orchestrator SHALL stop the current cycle's greedy
+accumulation. The rejected version's rules SHALL NOT be reused. The next
+candidate is selected fresh at the start of the next cycle.
+
+#### Scenario: Accumulation stops on rollback
 - **WHEN** a version is rolled back
-- **THEN** the next candidate from the queue is returned for composition
+- **THEN** the current cycle's accumulation stops and the best accepted version
+  is finalized
 
-#### Scenario: Queue exhausted
-- **WHEN** the candidate queue is exhausted and a rollback occurs
-- **THEN** the cycle stops and the stop reason is logged
-
-### Requirement: Decision artifact
-The component SHALL persist the decision as a JSON artifact whose filename
-contains `run_id`, `new_version`, `active_version`, and `timestamp`. The
-artifact SHALL contain: `decision` (accept or rollback), `new_version`,
-`active_version`, `metrics_new`, `metrics_active`, `diff_accuracy`,
-`diff_macro_f1`, `diff_minority_f1`, `rollback_count`, and `reason`.
-
-#### Scenario: Artifact named consistently
-- **WHEN** a decision is made
-- **THEN** the file is named
-  `decision_{run_id}_v{new_version}_vs_v{active_version}_{timestamp}.json`
-
-#### Scenario: Artifact reloaded
-- **WHEN** the artifact is loaded
-- **THEN** the decision, versions, metrics, and reason are available
-
-### Requirement: Changed decisions
-The component SHALL report the list of example ids whose `predicted_decision`
-changed between the active version and the new version. The list SHALL include
-the direction of change (correct→incorrect, incorrect→correct).
-
-#### Scenario: Changed decisions listed
-- **WHEN** the new version fixes 5 examples and breaks 3
-- **THEN** the list contains 8 ids with the direction of change
-
-#### Scenario: No changed decisions
-- **WHEN** no `predicted_decision` changed
-- **THEN** the list is empty
-
-### Requirement: Logging of decision
-The component SHALL log the decision process: new version, active version,
-metrics for both, differences, rollback count, and final decision.
-
-#### Scenario: Decision logged
-- **WHEN** a decision is made
-- **THEN** the log contains `new_version`, `active_version`, `metrics_new`,
-  `metrics_active`, `diff_accuracy`, `diff_macro_f1`, `diff_minority_f1`,
-  `rollback_count`, and `decision`
+#### Scenario: Next candidate next cycle
+- **WHEN** a rollback occurred in one cycle
+- **THEN** the next candidate is tried in the following cycle after fresh
+  selection
 
 ### Requirement: Configurable parameters
 The component SHALL support configuration via config for `decision_metric`
 (default `macro_f1`) and `tie_breaker_metric` (default `minority_f1`). The
-`tie_breaker_metric` SHALL be logged but SHALL NOT influence the
-accept/rollback decision. The `max_consecutive_rollbacks` parameter SHALL
-no longer be used.
-
-#### Scenario: Custom rollback limit
-- **WHEN** config sets `max_consecutive_rollbacks`
-- **THEN** the value is ignored; the cycle orchestrator's `no_improvement`
-  stop condition governs stopping instead
+`tie_breaker_metric` SHALL participate only in tie decisions on the primary
+metric. The `max_consecutive_rollbacks` parameter SHALL no longer be used.
 
 #### Scenario: Custom decision metric
 - **WHEN** config sets `decision_metric=accuracy`
 - **THEN** the decision is based on accuracy on holdout instead of macro-F1
 
-### Requirement: Domain service decision rule with tie-breaker
+#### Scenario: Custom tie-breaker metric
+- **WHEN** config sets `tie_breaker_metric=accuracy`
+- **THEN** ties on the decision metric are resolved by accuracy on holdout
 
-The domain service `decide()` in `domain/services/decision.py` SHALL decide
-whether to accept or roll back a new version using the following rule:
+#### Scenario: Unused rollback limit
+- **WHEN** config sets `max_consecutive_rollbacks`
+- **THEN** the value is ignored; the cycle orchestrator's `no_improvement`
+  stop condition governs stopping instead
 
-- When the new version's decision metric is **strictly greater** than the
-  active version's, the domain service SHALL accept.
-- When the decision metric is **equal**, the domain service SHALL accept only
-  if the tie-breaker metric is strictly higher; otherwise it SHALL roll back.
-- When the decision metric is **lower**, the domain service SHALL roll back.
+### Requirement: Logging of decision
+The cycle orchestrator SHALL log each decision with the new version, the
+active version, both versions' holdout metrics, and the final decision.
 
-This rule is distinct from the application use case's strict-improvement-only
-rule. Both rules coexist: the application use case (`comparator.py`) requires
-strict improvement and ignores the tie-breaker; the domain service
-(`decision.py`) uses the tie-breaker to break ties on the primary metric.
-
-#### Scenario: Accept on primary improvement
-- **WHEN** the new version's decision metric is strictly greater than the
-  active version's
-- **THEN** the domain service returns `accept`
-
-#### Scenario: Accept on primary tie with tie-breaker improvement
-- **WHEN** the new version's decision metric equals the active version's
-  and the tie-breaker metric is strictly higher
-- **THEN** the domain service returns `accept`
-
-#### Scenario: Rollback on primary tie without tie-breaker improvement
-- **WHEN** the new version's decision metric equals the active version's
-  and the tie-breaker metric is equal or lower
-- **THEN** the domain service returns `rollback`
-
-#### Scenario: Rollback on primary degradation
-- **WHEN** the new version's decision metric is lower than the active
-  version's
-- **THEN** the domain service returns `rollback`
+#### Scenario: Decision logged
+- **WHEN** a decision is made
+- **THEN** the cycle log contains `new_version`, `active_version`, the holdout
+  metrics of both, and `decision`

@@ -1,4 +1,5 @@
 """Incremental cluster counters and atomic thesis-bank dump writes."""
+
 from __future__ import annotations
 
 import json

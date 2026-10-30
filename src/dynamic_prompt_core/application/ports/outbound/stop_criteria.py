@@ -1,4 +1,5 @@
 """Outbound port: contract for content-based cycle stop-criteria evaluation."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

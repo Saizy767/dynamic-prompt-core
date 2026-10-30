@@ -100,15 +100,21 @@ with concurrent HTTP requests bounded by a configured concurrency limit.
 - **THEN** their HTTP requests are issued concurrently, bounded by the concurrency limit
 
 ### Requirement: HTTP error translation and transient retry
-Transport-level failures (connection refused, server disconnect, timeout)
-SHALL be retried up to a bounded number of attempts with delay. Non-200
-responses and malformed response bodies SHALL surface as scoring errors
-carrying the endpoint, status, and a response excerpt. No raw HTTP client
-exceptions SHALL escape the seam.
+Transient transport-level failures (connection refused, server disconnect)
+SHALL be retried up to a bounded number of attempts with delay. Timeouts SHALL
+fail fast without retry: the configured timeout already bounds per-request
+latency, and retrying would multiply worst-case wait time. Non-200 responses
+and malformed response bodies SHALL surface as scoring errors carrying the
+endpoint, status, and a response excerpt. No raw HTTP client exceptions SHALL
+escape the seam.
 
 #### Scenario: Transient disconnect is retried
 - **WHEN** the server disconnects mid-request
 - **THEN** the seam retries up to the bounded attempt count before failing
+
+#### Scenario: Timeout fails fast
+- **WHEN** a request exceeds the configured timeout
+- **THEN** a scoring error is raised immediately without retry
 
 #### Scenario: HTTP error surfaces as scoring error
 - **WHEN** the server returns a non-200 status

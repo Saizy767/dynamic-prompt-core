@@ -1,4 +1,5 @@
 """Unit tests for the rollback streak criterion."""
+
 from __future__ import annotations
 
 from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.criteria import (

@@ -1,4 +1,5 @@
 """Public API for the server infrastructure package."""
+
 from __future__ import annotations
 
 from dynamic_prompt_core.infrastructure.server.argv import (

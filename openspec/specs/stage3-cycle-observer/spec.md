@@ -10,36 +10,48 @@ decisions or mutating state.
 ## Requirements
 
 ### Requirement: Load cycle artifacts
-The component SHALL load the artifacts produced by the cycle: per-round
-reports, decision artifacts, prompt-version records from the prompt store,
-metrics artifacts, thesis dumps, and changed-decisions lists. The
-component SHALL fail with an error naming the missing or corrupted artifact
-when an expected file is not found or does not parse.
+The component SHALL load the artifacts produced by the cycle: per-cycle
+reports, the final summary, prompt-version artifacts from the composer's
+output, and thesis dumps. The component SHALL fail with an error naming the
+missing or corrupted artifact when the FINAL SUMMARY is not found or does not
+parse. Optional artifacts (per-cycle reports, prompt versions, thesis dumps)
+MAY be absent; absent optional artifacts are tolerated and reported as gaps,
+not errors.
 
 #### Scenario: All artifacts present
 - **WHEN** the cycle is complete and all artifacts are present
 - **THEN** the observer loads them without errors
 
-#### Scenario: Missing artifact
-- **WHEN** the decision artifact for a round is absent
+#### Scenario: Missing final summary
+- **WHEN** the final summary is absent
 - **THEN** loading fails with an error naming the missing file
+
+#### Scenario: Optional artifacts tolerated
+- **WHEN** per-cycle reports or thesis dumps are absent
+- **THEN** the observer renders the summary from what exists and notes the gaps
 
 #### Scenario: Corrupted artifact
 - **WHEN** an artifact's JSON is corrupted
 - **THEN** loading fails with an error naming the corrupted file
 
 ### Requirement: Summarize each round
-The component SHALL produce a summary for each round containing: round number,
-active version at round start, new composed version, decision (accept or
-rollback), key dev metrics before and after, minority-class F1 change, count of
-changed predictions, and rollback counter value.
+The component SHALL produce a summary for each cycle containing: cycle number,
+active version at cycle start, new composed version, decision (accept or no
+improvement), key dev metrics before, holdout metrics for the base and
+finalized versions (labeled as holdout — the pipeline does not produce a
+separate dev-after run for the finalized version), minority-class F1 change,
+and rollback counter value.
 
-#### Scenario: Round summary produced
-- **WHEN** the observer processes round 3
+#### Scenario: Cycle summary produced
+- **WHEN** the observer processes cycle 3
 - **THEN** the summary contains all listed fields
 
-#### Scenario: Round skipped
-- **WHEN** a round is absent from the artifacts
+#### Scenario: Metrics labeled honestly
+- **WHEN** the summary shows the "after" side of the comparison
+- **THEN** it is labeled as holdout metrics, not presented as dev-after metrics
+
+#### Scenario: Cycle skipped
+- **WHEN** a cycle is absent from the artifacts
 - **THEN** no summary is produced for it and the skip is logged
 
 ### Requirement: Show prompt evolution

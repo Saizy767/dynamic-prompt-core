@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
+from dynamic_prompt_core.application.ports.outbound.dataset_repository import (
+    DatasetRepository,
+)
 from dynamic_prompt_core.application.ports.outbound.extractor import Extractor
 from dynamic_prompt_core.application.ports.outbound.llm_client import LLMClient
 from dynamic_prompt_core.application.ports.outbound.normalizer import Normalizer
@@ -42,6 +45,7 @@ class RunCycleDeps:
     normalizer: Normalizer
     classifier: Classifier
     extractor: Extractor
+    dataset_repository: DatasetRepository
     candidates: tuple[Candidate, ...]
     teacher_llm_client: TeacherLLMClient | None = None
     stop_criteria_deps: EvaluateStopCriteriaDeps | None = None

@@ -10,21 +10,22 @@ artifact with full lineage back to source clusters.
 
 ## Requirements
 
-### Requirement: Load rule-candidate artifact
-The component SHALL load a JSON artifact containing the selected candidates with
-fields `cluster_id`, `representative_theses`, `precision`, `frequency`,
-`positive_hits`, `negative_hits`, and `rank`. The component SHALL fail with an
-error naming the first problematic candidate and field when a candidate does not
-conform to the schema.
+### Requirement: Receive rule candidates
+The component SHALL receive the selected rule candidates as structured dicts
+(fields `cluster_id`, `representative_theses`, `precision`, `frequency`,
+`positive_hits`, `negative_hits`, and `rank`) from the cycle orchestrator.
+Candidate-artifact schema validation is the selector's responsibility
+(upstream): the selector loads and validates the thesis artifact before
+selection. The composer SHALL fail with an error when a received candidate is
+missing required data needed for rule formulation.
 
-#### Scenario: Valid artifact loads
-- **WHEN** the artifact contains candidates with all required fields
-- **THEN** the candidates are loaded for rule formulation
+#### Scenario: Candidates received from orchestrator
+- **WHEN** the orchestrator invokes composition
+- **THEN** the candidates are passed as structured dicts, already validated by the selector
 
-#### Scenario: Missing candidate field
-- **WHEN** a candidate is missing `representative_theses`
-- **THEN** loading fails with an error naming the `cluster_id` and the missing
-  field
+#### Scenario: Missing candidate data
+- **WHEN** a received candidate is missing `representative_theses`
+- **THEN** composition fails with an error naming the `cluster_id` and the missing field
 
 ### Requirement: Load base prompt layers
 The component SHALL load the base layers (`role`, `task`, `output contract`,
@@ -123,9 +124,10 @@ limit.
 ### Requirement: Prompt version artifact
 The component SHALL persist the new prompt version as a JSON artifact whose
 filename contains `version`, `run_id`, and `timestamp`. The artifact SHALL
-contain: `version`, `text` (full prompt text), `hash` (sha256 of the `text`),
-`rules` (list of rule texts), `source_candidates` (list of `cluster_id` used),
-`base_version` (the version the new one derives from), and `created_at`.
+contain: `version`, `text` (full prompt text), `hash` (full sha256 hexdigest of
+the `text`), `rules` (list of `{cluster_id, text}` entries — one per rule,
+carrying the originating cluster), `source_candidates` (list of `cluster_id`
+used), `base_version` (the version the new one derives from), and `created_at`.
 
 #### Scenario: Artifact named consistently
 - **WHEN** composition completes
@@ -135,6 +137,10 @@ contain: `version`, `text` (full prompt text), `hash` (sha256 of the `text`),
 - **WHEN** the artifact is loaded
 - **THEN** the `version`, `text`, `hash`, and `rules` are available without
   re-composition
+
+#### Scenario: Hash is full sha256
+- **WHEN** the artifact's `hash` is compared with the prompt store's record for the same text
+- **THEN** both are the full sha256 hexdigest of `text` and are equal
 
 ### Requirement: Version lineage
 The component SHALL record the link between each rule in the new version and the
@@ -163,7 +169,7 @@ how many were rejected for limits, and the final count of rules in the version.
 
 ### Requirement: Configurable parameters
 The component SHALL support configuration via config for `max_rules` (default 5),
-`max_prompt_tokens` (default 300), `max_rule_words` (default 15),
+`max_prompt_tokens` (default 300), `max_rule_words` (default 20),
 `distortion_threshold` (default 0.75), and `allow_reformulation` (default true).
 
 #### Scenario: Custom parameters

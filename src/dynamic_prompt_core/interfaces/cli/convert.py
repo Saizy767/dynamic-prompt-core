@@ -1,4 +1,5 @@
 """CLI wrapper for CSV to JSONL conversion."""
+
 from __future__ import annotations
 
 import argparse

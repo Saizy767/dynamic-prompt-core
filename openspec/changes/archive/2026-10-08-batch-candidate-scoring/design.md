@@ -98,8 +98,7 @@ class BatchedCausalLanguageModel(Protocol):
         self,
         input_ids,
         attention_mask=None,
-    ) -> BatchedLogits:
-        ...
+    ) -> BatchedLogits: ...
 ```
 
 `BatchedLogits` has the semantic shape `[batch_size, sequence_length,

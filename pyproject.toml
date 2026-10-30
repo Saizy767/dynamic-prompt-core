@@ -23,7 +23,7 @@ dependencies = [
 dev = [
     "import-linter>=2.0",
     "mypy>=1.10",
-    "ruff>=0.6",
+    "ruff>=0.14,<0.17",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
@@ -79,6 +79,7 @@ type = "forbidden"
 source_modules = ["dynamic_prompt_core.application"]
 forbidden_modules = [
     "dynamic_prompt_core.interfaces",
+    "dynamic_prompt_core.infrastructure",
 ]
 
 # application ports must not depend on infrastructure or interfaces, directly

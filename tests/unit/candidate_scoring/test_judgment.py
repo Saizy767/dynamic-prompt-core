@@ -1,4 +1,5 @@
 """Tests for the Judgment domain model."""
+
 from __future__ import annotations
 
 import dataclasses

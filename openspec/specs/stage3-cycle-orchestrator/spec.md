@@ -27,15 +27,18 @@ and `__all__`. Internal implementation modules (`steps.py`, `state.py`,
 
 ### Requirement: Dependency object
 `run_cycle` SHALL receive all dependencies through a typed dependency object
-(`RunCycleDeps`). The dependency object SHALL contain outbound ports:
-`llm_client`, `prompt_repository`, `run_repository`, `dataset_repository`,
-`embedding_client`, `normalizer`, and optionally `teacher_llm_client`. The
-dependency object SHALL NOT contain concrete infrastructure implementations.
-The use case SHALL NOT create dependencies itself or use a service locator.
+(`RunCycleDeps`). The dependency object SHALL contain outbound ports and
+collaborators: `llm_client`, `prompt_repository`, `run_repository`,
+`normalizer`, `classifier`, `extractor`, `candidates` (a tuple), and
+optionally `teacher_llm_client` and `stop_criteria_deps`. The dataset is
+supplied as a file path; embeddings are loaded inside the analyzer/composer
+components. The dependency object SHALL NOT contain concrete infrastructure
+implementations. The use case SHALL NOT create dependencies itself or use a
+service locator.
 
 #### Scenario: Typed dependency object
 - **WHEN** the use case is called
-- **THEN** it receives a dependency object containing typed ports
+- **THEN** it receives a dependency object containing typed ports and collaborators
 
 #### Scenario: No concrete dependencies
 - **WHEN** the use case executes
@@ -78,9 +81,11 @@ SHALL be used.
 ### Requirement: Composition root wiring
 `interfaces/cli/main.py` SHALL assemble all dependencies for `run_cycle`:
 concrete port implementations from `infrastructure`, including the LLM client,
-prompt repository, run repository, dataset repository, embedding client,
-normalizer, and teacher client (when enabled). The composition root SHALL NOT
-contain business logic. No other module SHALL create these dependencies.
+prompt repository, run repository, normalizer, classifier, extractor, the
+candidate tuple, teacher client (when enabled), and stop-criteria dependencies
+(when a `[stop_criteria]` config section exists). The dataset is passed as a
+file path. The composition root SHALL NOT contain business logic. No other
+module SHALL create these dependencies.
 
 #### Scenario: Dependencies wired in CLI
 - **WHEN** the CLI starts the cycle command
@@ -94,7 +99,9 @@ contain business logic. No other module SHALL create these dependencies.
 `run_cycle` SHALL continue when an individual example fails (parse error,
 timeout, HTTP error), recording the failure in the result record. The cycle
 SHALL NOT abort due to a single example error. An unrecoverable exception in
-the use case itself SHALL stop the cycle with reason `unrecoverable_error`.
+the use case itself SHALL stop the cycle: the use case SHALL write a final
+summary with reason `unrecoverable_error` and then re-raise the exception to
+the caller.
 
 #### Scenario: Single example failure
 - **WHEN** the model returns invalid JSON for an example
@@ -102,7 +109,7 @@ the use case itself SHALL stop the cycle with reason `unrecoverable_error`.
 
 #### Scenario: Unrecoverable error
 - **WHEN** the use case raises an unrecoverable exception
-- **THEN** the cycle stops with reason `unrecoverable_error`
+- **THEN** a final summary with reason `unrecoverable_error` is written and the exception propagates to the caller
 
 ### Requirement: Testability
 `run_cycle` SHALL be testable with mock implementations of the ports. Tests
@@ -122,11 +129,13 @@ and resumability from a dumped state.
 `run_cycle` SHALL accept cycle configuration as a typed object (`CycleConfig`)
 containing `max_cycles` (default 5), `decision_metric` (default `macro_f1`),
 `tie_breaker_metric` (default `minority_f1`), `dev_split`, `holdout_split`,
-artifact paths, `run_id`, `stop_on_first_error` (default false),
-`dump_state_after_each_cycle` (default true), and
+artifact paths, `run_id`, `dump_state_after_each_cycle` (default true), and
 `use_teacher_refinement` (default false). The configuration SHALL be loaded
-by the composition root and passed in. The use case SHALL NOT read
-`config.toml` directly.
+by the composition root and passed in. When no config object is supplied, the
+use case SHALL fall back to loading `CycleConfig` from the run input's config
+path. Per-step component configurations (runner, analyzer, selector, composer)
+SHALL be loaded by each step from the same config path — documented delegation
+to the components' own loaders.
 
 #### Scenario: Valid configuration loads
 - **WHEN** the use case is called with a `CycleConfig` containing all required
@@ -137,16 +146,17 @@ by the composition root and passed in. The use case SHALL NOT read
 - **WHEN** a required configuration value is absent from the `CycleConfig`
 - **THEN** initialization fails with an error naming the missing key
 
-#### Scenario: No file reads
-- **WHEN** the use case executes
-- **THEN** it does not open `config.toml`
+#### Scenario: Fallback config load
+- **WHEN** the use case is invoked without a config object
+- **THEN** it loads `CycleConfig` from the run input's config path
 
 ### Requirement: Load initial state
 `run_cycle` SHALL load the initial state: the active prompt version via
-`prompt_repository`, the prepared dataset via `dataset_repository`, and the
-fixed extraction prompt. The cycle SHALL start with an empty thesis collection
-and the active prompt. The use case SHALL raise an exception naming the missing
-artifact when the active version or dataset is not found.
+`prompt_repository`, the dataset from its file path, and the fixed extraction
+prompt. The cycle SHALL start with an empty thesis collection and the active
+prompt. The use case SHALL raise an exception naming the missing artifact when
+the active version or dataset is not found; a missing active prompt SHALL NOT
+silently fall back to the baseline prompt.
 
 #### Scenario: Initial state loaded
 - **WHEN** the active version v0 and dataset exist
@@ -179,13 +189,14 @@ artifact when the active version or dataset is not found.
       `stage1-baseline-runner` with thesis extraction disabled.
    c. Compare `vN_k` against the current best version via
       `stage2-version-comparator` using holdout metrics.
-   d. When `vN_k`'s holdout metric is strictly greater than the current
-      best, accept it: update the current best version, mark the
-      candidate's cluster as `in_prompt`, and continue to the next
-      candidate (step 6a).
-   e. When `vN_k`'s holdout metric is not strictly greater (equal or
-      lower), stop accumulation: discard the candidate's rule, keep the
-      current best version, and proceed to step 7.
+   d. Accept `vN_k` when its holdout decision metric is strictly greater
+      than the current best's, or when the decision metric ties and the
+      tie-breaker metric is strictly greater: update the current best
+      version, mark the candidate's cluster as `in_prompt`, and continue
+      to the next candidate (step 6a).
+   e. Otherwise (decision metric lower, or tie without tie-breaker
+      improvement), stop accumulation: discard the candidate's rule, keep
+      the current best version, and proceed to step 7.
    f. When the number of accumulated rules reaches `max_rules`, stop
       accumulation and proceed to step 7.
    g. When the candidate queue is exhausted, proceed to step 7.
@@ -201,13 +212,14 @@ exhaustion. Candidate versions SHALL NOT be run on dev — only holdout.
 - **THEN** steps 1–8 are performed in order
 
 #### Scenario: Multiple rules accumulated
-- **WHEN** candidates 1 and 2 both strictly improve the holdout metric and
-  candidate 3 does not
+- **WHEN** candidates 1 and 2 both improve the holdout decision metric
+  (strictly, or on a tie via the tie-breaker) and candidate 3 does not
 - **THEN** the cycle ends with the finalized version containing rules from
   candidates 1 and 2, and candidate 3's rule is discarded
 
 #### Scenario: First candidate degrades
-- **WHEN** the first candidate does not strictly improve the holdout metric
+- **WHEN** the first candidate neither strictly improves the holdout decision
+  metric nor wins the tie-breaker on a tie
 - **THEN** the cycle ends with the active version unchanged (no rules added)
   and the process stops with reason `no_improvement`
 
@@ -235,22 +247,18 @@ with reason `max_cycles_reached` when the counter reaches `max_cycles`.
 ### Requirement: Candidate queue
 `run_cycle` SHALL maintain a candidate queue populated by the
 `stage2-rule-candidate-selector` at the start of each cycle. The queue SHALL
-be consumed in order during greedy accumulation. When accumulation stops due
-to degradation, remaining candidates SHALL stay in the queue for the next
-cycle. The queue SHALL be refilled from the current cycle's selection at the
-start of each cycle.
+be consumed in order during greedy accumulation. The queue SHALL be REPLACED
+by the current cycle's fresh selection at the start of each cycle: leftover
+candidates from the previous cycle are discarded, because each cycle's
+selection reflects the current active version and thesis state.
 
 #### Scenario: Queue consumed in order
 - **WHEN** the composer requests a candidate
 - **THEN** the next candidate from the queue is returned
 
-#### Scenario: Queue refilled each round
+#### Scenario: Queue replaced each cycle
 - **WHEN** a new cycle starts
-- **THEN** the queue is refilled from the current cycle's selection
-
-#### Scenario: Remaining candidates preserved on degradation
-- **WHEN** accumulation stops due to degradation with candidates remaining
-- **THEN** the remaining candidates stay in the queue for the next cycle
+- **THEN** the queue is replaced by the current cycle's fresh selection, not appended to
 
 #### Scenario: Queue exhausted without acceptance
 - **WHEN** the queue is exhausted and no candidate was accepted
@@ -276,8 +284,10 @@ baseline for comparison.
 ### Requirement: Accept updates active version
 When a new version is accepted, `run_cycle` SHALL activate the new version via
 `prompt_repository`. The previous active version SHALL be archived. The
-`in_prompt` flags in the thesis collection SHALL be updated: `true` for theses
-whose clusters produced accepted rules, `false` for all others.
+`in_prompt` flags in the thesis collection SHALL be updated monotonically:
+`true` for theses whose clusters produced accepted rules; flags that are
+already `true` SHALL stay `true` (clearing them would let the selector
+re-propose duplicate rules in later cycles).
 
 #### Scenario: Active version updated
 - **WHEN** a new version is accepted
@@ -287,10 +297,10 @@ whose clusters produced accepted rules, `false` for all others.
 - **WHEN** a new version is activated
 - **THEN** the previous active version is archived
 
-#### Scenario: Thesis flags updated
+#### Scenario: Thesis flags updated monotonically
 - **WHEN** a new version is accepted
-- **THEN** `in_prompt` is set to true for theses in accepted clusters and false
-  for others
+- **THEN** `in_prompt` is set to true for theses in accepted clusters and
+  previously-true flags remain true
 
 #### Scenario: Thesis bank updated
 - **WHEN** a new version is accepted
@@ -302,9 +312,8 @@ whose clusters produced accepted rules, `false` for all others.
 report SHALL contain: cycle number, active version (base) at cycle start,
 finalized version, decision (accept or no improvement), dev metrics for the
 active version (from step 1), holdout metrics for the active version and the
-finalized version, the list of `vN_k` intermediate attempts with their
-holdout metrics and accept/rollback decisions, accepted cluster ids, and next
-action. The report SHALL be saved via `run_repository`.
+finalized version, and next action. The report SHALL be saved via
+`run_repository`.
 
 #### Scenario: Report written
 - **WHEN** a cycle completes
@@ -317,11 +326,13 @@ action. The report SHALL be saved via `run_repository`.
 ### Requirement: Final summary
 `run_cycle` SHALL produce a final summary when the process stops. The summary
 SHALL contain: total cycles executed, stop reason, final active version, final
-dev and holdout metrics, history of accepted versions, history of rollbacks,
-and the list of all changed decisions across cycles. The summary SHALL be
-saved via `run_repository`. The stop reason SHALL be one of:
-`max_cycles_reached`, `no_improvement`, `unrecoverable_error`,
-`plateau_detected`.
+dev and holdout metrics, history of accepted versions, and history of
+rollbacks. The summary SHALL be saved via `run_repository`. The stop reason
+SHALL be one of: `max_cycles_reached`, `no_improvement`,
+`unrecoverable_error`, `plateau_detected`, `budget_exhausted`,
+`no_candidates_available`, `metric_degradation`, `rule_stagnation`,
+`rollback_streak` (the last six arise from the optional stop-criteria
+evaluation).
 
 #### Scenario: Summary written on stop
 - **WHEN** the process stops for any reason
@@ -329,8 +340,7 @@ saved via `run_repository`. The stop reason SHALL be one of:
 
 #### Scenario: Stop reasons enumerated
 - **WHEN** the process stops
-- **THEN** the stop reason is one of: `max_cycles_reached`,
-  `no_improvement`, `unrecoverable_error`, `plateau_detected`
+- **THEN** the stop reason is one of the enumerated values above
 
 ### Requirement: State dump
 `run_cycle` SHALL save the cycle state after each cycle via
@@ -384,29 +394,24 @@ event SHALL carry a timestamp and cycle number. The module SHALL NOT call
 ### Requirement: Configurable parameters
 `run_cycle` SHALL support configuration via `CycleConfig` for `max_cycles`
 (default 5), `decision_metric` (default `macro_f1`), `tie_breaker_metric`
-(default `minority_f1`), `stop_on_first_error` (default false),
-`dump_state_after_each_cycle` (default true), and
+(default `minority_f1`), `dump_state_after_each_cycle` (default true), and
 `use_teacher_refinement` (default false).
 
-#### Scenario: Custom max rounds
+#### Scenario: Custom max cycles
 - **WHEN** the configuration sets `max_cycles=3`
 - **THEN** the process stops after three cycles
-
-#### Scenario: Stop on first error
-- **WHEN** the configuration sets `stop_on_first_error=true` and a step fails
-- **THEN** the process stops immediately
 
 ### Requirement: Cycle/cluster versioning
 `run_cycle` SHALL name intermediate prompt versions using the scheme
 `vN_k` where `N` is the cycle number and `k` is the cluster index within
 that cycle (1-indexed). The finalized best version of cycle `N` SHALL be
-renamed to `vN`. The baseline `CLASSIFICATION_PROMPT_V0` SHALL be `v0`.
-Cycle `N` starts with base `v(N-1)`, produces intermediates `vN_1`,
-`vN_2`, …, and finalizes the best as `vN`.
+renamed to `vN`. The baseline `CLASSIFICATION_PROMPT_V0` carries the version
+id `classify-v0`. Cycle `N` starts with base `v(N-1)`, produces intermediates
+`vN_1`, `vN_2`, …, and finalizes the best as `vN`.
 
-#### Scenario: Baseline is v0
+#### Scenario: Baseline version id
 - **WHEN** the cycle starts from `CLASSIFICATION_PROMPT_V0`
-- **THEN** the baseline version is named `v0`
+- **THEN** the baseline version is named `classify-v0`
 
 #### Scenario: Intermediate version naming
 - **WHEN** cycle 2 composes its third cluster candidate
@@ -441,6 +446,39 @@ candidate queue is empty at the start of accumulation.
   degrades
 - **THEN** the cycle finalizes the best and the process continues to the
   next cycle (not `no_improvement`)
+
+### Requirement: Content-based stop evaluation
+`run_cycle` SHALL call `evaluate_stop_criteria` at the end of each cycle, after
+the per-cycle report is written and before deciding whether to start the next
+cycle, WHEN stop-criteria dependencies are wired. The composition root wires
+`stop_criteria_deps` only when a `[stop_criteria]` section exists in
+`config.toml`; with the section absent the evaluation is skipped and the
+cycle relies on its hard limits alone. The call SHALL pass the current cycle
+state: per-cycle metric history, decision history, cycle counter, rollback
+counter, candidate-queue size, total teacher-model token spend, and the
+stop-criteria configuration. When the evaluation returns `stop`, the cycle
+SHALL terminate with the returned reason. When the evaluation returns
+`continue`, the cycle SHALL proceed to the next cycle. This evaluation is
+additional to the hard-limit checks (`max_cycles`, `no_improvement`) which
+SHALL still be performed before starting a cycle.
+
+#### Scenario: Orchestrator stops on criteria
+- **WHEN** `evaluate_stop_criteria` returns `stop`
+- **THEN** the cycle terminates with the returned reason
+
+#### Scenario: Orchestrator continues
+- **WHEN** `evaluate_stop_criteria` returns `continue`
+- **THEN** the cycle proceeds to the next cycle
+
+#### Scenario: Hard limits checked first
+- **WHEN** a hard limit (`max_cycles`, `no_improvement`) is reached before a
+  cycle starts
+- **THEN** the cycle stops without calling `evaluate_stop_criteria`
+
+#### Scenario: Optional wiring
+- **WHEN** no `[stop_criteria]` section exists in `config.toml`
+- **THEN** the composition root leaves `stop_criteria_deps` unset and the
+  cycle never calls `evaluate_stop_criteria`
 
 ### Requirement: Consecutive rollback count in stop-criteria context
 

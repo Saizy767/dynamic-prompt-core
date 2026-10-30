@@ -8,6 +8,7 @@ resides in ``domain.errors`` (rather than ``application.errors``) because
 direction), while importing ``application`` would create a cycle with the
 pre-existing ``application.use_cases → infrastructure`` migration debt.
 """
+
 from __future__ import annotations
 
 

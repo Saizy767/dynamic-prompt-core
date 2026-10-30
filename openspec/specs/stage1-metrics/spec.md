@@ -13,8 +13,9 @@ and run, and compare two prompt-version metrics on the same split.
 ### Requirement: Load run artifact
 The component SHALL load the results artifact produced by `stage1-baseline-runner`
 and SHALL verify that every record carries the required fields: `id`, `text`,
-`true_label`, `predicted_decision`, `confidence`, `classify_status`,
-`theses_norm`. The component SHALL fail with an error naming the first offending
+`true_label`, `classify_status`, `theses_norm`. For records with
+`classify_status=ok` the component SHALL additionally verify `predicted_decision`
+is present. The component SHALL fail with an error naming the first offending
 record's `id` and the missing field when a record does not conform to the schema.
 
 #### Scenario: Valid artifact loads
@@ -22,7 +23,7 @@ record's `id` and the missing field when a record does not conform to the schema
 - **THEN** metrics are computed over all records with `classify_status=ok`
 
 #### Scenario: Missing field in record
-- **WHEN** a record is missing `predicted_decision`
+- **WHEN** an ok-record is missing `predicted_decision`
 - **THEN** loading fails with an error naming the record's `id` and the missing field
 
 ### Requirement: Accuracy and F1
@@ -131,14 +132,16 @@ changed between the versions.
 - **WHEN** v1 fixed 5 examples and broke 3
 - **THEN** the list of changed records contains 8 `id`s with the direction of each change
 
-### Requirement: Metrics are computed for dev only
-The component SHALL compute metrics for dev and holdout separately. Holdout
-metrics SHALL be logged but MUST NOT participate in accepting or rolling back a
-prompt version on Stage 1.
+### Requirement: Metrics are computed for dev and holdout separately
+The component SHALL compute metrics for dev and holdout separately. The
+metrics component itself is decision-agnostic: it computes and reports metrics
+per split. The accept/rollback decision is the cycle orchestrator's
+responsibility and is driven by holdout metrics (see the
+stage3-cycle-orchestrator spec); Stage 1 metrics artifacts record both splits.
 
-#### Scenario: Dev metrics used for decisions
+#### Scenario: Both splits reported
 - **WHEN** a prompt version is evaluated
-- **THEN** the decision is based on dev metrics, while holdout metrics are stored separately for later analysis
+- **THEN** metrics are computed and stored separately for `dev` and `holdout`
 
 ### Requirement: Label value validation
 The component SHALL validate that `true_label` is an integer in `{0, 1}` for

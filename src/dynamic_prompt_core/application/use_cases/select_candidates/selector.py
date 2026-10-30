@@ -11,11 +11,14 @@ artifact for downstream rule formulation. Driven by the cycle via
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
+
+log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = "config.toml"
 DEFAULT_OUTPUT_DIR = "data/results"
@@ -239,6 +242,14 @@ def select_candidates(
         "excluded_in_prompt": excluded_in_prompt,
         "selected_top_n": selected_top_n,
     }
+    log.info(
+        "candidate selection: total_clusters=%d passed_frequency=%d "
+        "excluded_in_prompt=%d selected_top_n=%d",
+        counters["total_clusters"],
+        counters["passed_frequency"],
+        counters["excluded_in_prompt"],
+        counters["selected_top_n"],
+    )
 
     return candidate_objs, already_ids, counters
 

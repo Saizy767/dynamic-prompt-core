@@ -1,14 +1,17 @@
 """Architectural invariant tests for the candidate-scoring migration.
 
-These tests verify invariants that lint-imports cannot express:
-- application classification tests do not import infrastructure scoring;
-- concrete scorer construction has one production source;
-- the scorer is constructed once per process in the composition root;
-- no legacy structured-generation classification dependency remains;
+Layer-boundary invariants (application must not import infrastructure,
+ports must stay infrastructure-free) are enforced by the import-linter
+contracts in pyproject.toml.  These tests cover what the linter cannot
+express:
+- concrete classifier construction has one production source;
+- no legacy structured-generation classification dependency remains in
+  the classification path;
 - the composition root is allowed to import infrastructure;
 - no infrastructure state (tensors, logits, token IDs) escapes into
   domain or application types.
 """
+
 from __future__ import annotations
 
 import ast
@@ -47,9 +50,7 @@ class TestConcreteClassifierConstructionHasOneSource:
     def test_build_cli_deps_uses_shared_factory(self) -> None:
         main_path = SRC_ROOT / "interfaces" / "cli" / "main.py"
         text = _file_text(main_path)
-        assert "build_classifier" in text, (
-            "build_cli_deps must call build_classifier"
-        )
+        assert "build_classifier" in text, "build_cli_deps must call build_classifier"
 
     def test_neither_composition_root_constructs_llm_logit_classifier_directly(self) -> None:
         """build_cli_deps must not construct LLMLogitClassifier directly
@@ -63,10 +64,7 @@ class TestConcreteClassifierConstructionHasOneSource:
                     func = node.func
                     if isinstance(func, ast.Name) and func.id == "LLMLogitClassifier":
                         pytest.fail(f"{path} constructs LLMLogitClassifier directly")
-                    if (
-                        isinstance(func, ast.Attribute)
-                        and func.attr == "LLMLogitClassifier"
-                    ):
+                    if isinstance(func, ast.Attribute) and func.attr == "LLMLogitClassifier":
                         pytest.fail(f"{path} constructs LLMLogitClassifier directly")
 
 
@@ -120,20 +118,14 @@ class TestNoLegacyStructuredGenerationDependency:
             if path.is_dir():
                 for py_file in path.rglob("*.py"):
                     text = _file_text(py_file)
-                    assert symbol not in text, (
-                        f"{py_file} references legacy symbol '{symbol}'"
-                    )
+                    assert symbol not in text, f"{py_file} references legacy symbol '{symbol}'"
             elif path.exists():
                 text = _file_text(path)
-                assert symbol not in text, (
-                    f"{path} references legacy symbol '{symbol}'"
-                )
+                assert symbol not in text, f"{path} references legacy symbol '{symbol}'"
 
     def test_no_json_classification_response_in_classification_path(self) -> None:
         """The classification path must not parse JSON classification responses."""
-        classifier_path = (
-            SRC_ROOT / "infrastructure" / "llm" / "classifier.py"
-        )
+        classifier_path = SRC_ROOT / "infrastructure" / "llm" / "classifier.py"
         text = _file_text(classifier_path)
         assert "json" not in text.lower() or "json" not in text, (
             "classifier should not parse JSON classification responses"
@@ -184,9 +176,7 @@ class TestNoInfrastructureStateEscapes:
         fields = {f.name for f in dataclasses.fields(Classification)}
         forbidden = fields & self.FORBIDDEN_FIELD_NAMES
         assert not forbidden, f"Classification has forbidden fields: {forbidden}"
-        assert fields == {"selected", "judgments"}, (
-            f"Unexpected Classification fields: {fields}"
-        )
+        assert fields == {"selected", "judgments"}, f"Unexpected Classification fields: {fields}"
 
     def test_result_row_fields_are_application_safe(self) -> None:
         from dynamic_prompt_core.application.use_cases.run_baseline.runner import ResultRow

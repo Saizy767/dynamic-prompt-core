@@ -30,17 +30,17 @@ does not pass.
 ### Requirement: Fixed train/holdout split
 The component SHALL split the dataset into `dev` and `holdout` using a fixed
 seed. The split SHALL be reproducible: the same dataset and seed yield the same
-`dev` and `holdout`. `holdout` SHALL be labeled and available for logging, but
-its metrics MUST NOT participate in accept or reject decisions for prompt
-versions on Stage 1.
+`dev` and `holdout`. `holdout` SHALL be labeled and available for evaluation;
+the optimization cycle drives accept/rollback decisions by holdout metrics
+(see the stage3-cycle-orchestrator spec).
 
 #### Scenario: Reproducible split
 - **WHEN** the dataset is loaded twice with the same seed
 - **THEN** the composition of `dev` and `holdout` is identical
 
-#### Scenario: Holdout metrics logged but not used
-- **WHEN** a prompt version is run
-- **THEN** metrics are computed on both `dev` and `holdout`, but the accept decision is based only on `dev` metrics
+#### Scenario: Holdout metrics drive cycle decisions
+- **WHEN** a prompt version is evaluated by the cycle
+- **THEN** metrics are computed on both `dev` and `holdout`, and the accept decision is driven by holdout metrics
 
 ### Requirement: Ambiguous examples separated
 The component SHALL support separating a group of `ambiguous` examples — records
@@ -53,33 +53,36 @@ marked as doubtful. `ambiguous` examples SHALL be excluded from `dev` and
 
 ### Requirement: Prompt v0 for classification
 The component SHALL provide a baseline system prompt v0 for binary
-classification, composed of five layers: role, task, rules (3–5 items), output
-contract, and fallback. The prompt SHALL be stored as an artifact with a version
-and a content hash. Rendering the prompt to text SHALL be performed by a simple
-templating helper with no external dependencies.
+classification, composed of five layers: role, task, rules (an empty list in
+the baseline — the zero-shot baseline), output contract, and fallback. The
+prompt SHALL be stored as an artifact with a version and a content hash.
+Rendering the prompt to text SHALL be performed by a simple templating helper
+with no external dependencies.
 
 #### Scenario: Prompt v0 rendered
 - **WHEN** prompt v0 is requested
 - **THEN** the returned prompt text is assembled from the five layers and carries a version and a hash
 
-#### Scenario: Rules count within limit
+#### Scenario: Baseline v0 is zero-shot
 - **WHEN** prompt v0 is assembled
-- **THEN** the number of rules is between 3 and 5, otherwise assembly fails with an error
+- **THEN** its rules layer is an empty list, and the runner passes empty `ClassificationRules` to the `Classifier` as a zero-shot baseline
 
 ### Requirement: Fixed extraction prompt
-The component SHALL provide a fixed system prompt for thesis extraction. This
+The infrastructure SHALL provide a fixed system prompt for thesis extraction
+as a packaged resource file (see the system-prompt-resources spec). This
 prompt MUST NOT be optimized on Stage 1 and SHALL be used unchanged across all
 optimization rounds.
 
 #### Scenario: Extraction prompt available
 - **WHEN** the runner requests the extraction prompt
-- **THEN** a fixed prompt text is returned with a version and a hash
+- **THEN** the fixed prompt text is loaded from its resource file
 
 ### Requirement: Thesis extraction schema
-The component SHALL provide a Pydantic schema for thesis extraction output: a
-list of strings where each string is 2–6 words and the total number of theses is
-3–5. The schema SHALL be used by the client (`AsyncTask.extract_theses`) for
-structured output.
+The infrastructure extractor (`infrastructure/llm/extractor.py`) SHALL provide
+a Pydantic schema (`ThesisExtraction`) for thesis extraction output: a list of
+strings where each string is 2–6 words and the total number of theses is 3–5.
+The schema SHALL be used by the client (`AsyncTask.extract_theses_detailed`)
+for structured output.
 
 #### Scenario: Schema validates extraction output
 - **WHEN** the model returns JSON with a `theses` field that is a list of 4 strings of 4 words each
@@ -89,18 +92,16 @@ structured output.
 - **WHEN** the model returns JSON with 8 theses
 - **THEN** Pydantic validation fails
 
-### Requirement: Classification schema
-The component SHALL provide a Pydantic schema for classification output:
-`decision` (`0` or `1`) and `confidence` (0–100). The schema SHALL be used by
-the client (`AsyncTask.classify`) for structured output.
+### Requirement: No generative classification schema
+The component SHALL NOT provide a Pydantic schema for generative
+classification output: classification is performed through candidate scoring
+(see the classifier spec), not through generative LLM calls, so no
+`decision`/`confidence` response schema and no `AsyncTask.classify` method
+exist.
 
-#### Scenario: Schema validates classification output
-- **WHEN** the model returns JSON `{"decision": 1, "confidence": 85}`
-- **THEN** Pydantic validation passes
-
-#### Scenario: Schema rejects invalid decision
-- **WHEN** the model returns `decision` equal to `2`
-- **THEN** Pydantic validation fails
+#### Scenario: No classification response schema
+- **WHEN** the codebase is inspected for a generative classification schema
+- **THEN** no `decision`/`confidence` response model and no `classify` client method exist
 
 ### Requirement: Dataset artifact persisted
 The component SHALL persist the prepared dataset (with the dev, holdout, and

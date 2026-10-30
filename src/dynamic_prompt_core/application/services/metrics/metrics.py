@@ -448,6 +448,7 @@ def compute_metrics(
         "total": total,
         "ok": parse_counts.get("ok", 0),
         "failed": parse_counts.get("failed", 0),
+        "failed_share": (parse_counts.get("failed", 0) / total) if total else 0.0,
         "repaired": parse_counts.get("repaired", 0),
         "not_attempted": parse_counts.get("not_attempted", 0),
     }

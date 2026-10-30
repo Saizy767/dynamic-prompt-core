@@ -1,4 +1,5 @@
 """evaluate_stop_criteria use case: content-based cycle stop-criteria evaluation."""
+
 from __future__ import annotations
 
 from dynamic_prompt_core.application.ports.outbound.stop_criteria import (

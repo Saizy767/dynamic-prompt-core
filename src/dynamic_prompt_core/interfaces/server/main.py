@@ -1,4 +1,5 @@
 """Server composition root: assemble ServerLauncher and manage lifecycle."""
+
 from __future__ import annotations
 
 import argparse
@@ -23,9 +24,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
 def build_server_deps(config: dict[str, Any]) -> ServerLauncher:

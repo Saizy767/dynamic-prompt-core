@@ -86,18 +86,20 @@ measurement.
 
 ### Requirement: Extractor runs after classification on dev
 On the dev split, the `Extractor` SHALL run after the classification stage has
-completed. This ordering SHALL hold even when rules are absent: classification
-is set to `0` without calling the `Classifier`, and then the `Extractor` runs.
-On the holdout split, the `Extractor` SHALL be skipped (`skip_extraction=True`),
-as in the current implementation.
+completed. This ordering SHALL hold even when rules are absent: with a layerless
+active prompt classification is set to `0` without calling the `Classifier`,
+and with an empty rules list the `Classifier` runs as a zero-shot baseline; in
+both cases the `Extractor` runs afterwards. On the holdout split, the
+`Extractor` SHALL be skipped (`skip_extraction=True`), as in the current
+implementation.
 
 #### Scenario: Extraction follows classification on dev
 - **WHEN** the runner processes an example on dev with rules present
 - **THEN** the classifier is called first, then the extractor is called
 
 #### Scenario: Extraction runs even without rules on dev
-- **WHEN** the runner processes an example on dev with absent rules
-- **THEN** classification is set to `0` without calling the classifier, and then the extractor is called
+- **WHEN** the runner processes an example on dev with absent or empty rules
+- **THEN** classification completes (skipped for a layerless prompt, zero-shot classifier call for empty rules), and then the extractor is called
 
 #### Scenario: Extraction skipped on holdout
 - **WHEN** the runner processes an example on holdout with `skip_extraction=True`

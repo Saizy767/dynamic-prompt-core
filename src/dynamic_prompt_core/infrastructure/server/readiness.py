@@ -1,13 +1,12 @@
 """Server readiness polling."""
+
 from __future__ import annotations
 
 import time
 import urllib.request
 
 
-def wait_for_ready(
-    endpoint: str, timeout: float, interval: float = 0.5
-) -> bool:
+def wait_for_ready(endpoint: str, timeout: float, interval: float = 0.5) -> bool:
     """Poll GET {endpoint}/models until HTTP 200 or timeout elapses.
 
     Returns True if the server became ready, False on timeout.

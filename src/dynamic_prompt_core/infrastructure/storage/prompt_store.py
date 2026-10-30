@@ -490,6 +490,7 @@ class PromptStore:
             "timestamp": datetime.now(UTC).isoformat(),
             "operation": operation,
             "version": version,
+            "path": self.config.store_path,
             "details": details,
         }
         try:

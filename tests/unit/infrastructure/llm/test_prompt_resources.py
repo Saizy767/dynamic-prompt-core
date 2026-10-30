@@ -1,4 +1,5 @@
 """Unit tests for the system prompt resource loader."""
+
 from __future__ import annotations
 
 import pytest

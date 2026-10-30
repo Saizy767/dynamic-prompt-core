@@ -26,11 +26,13 @@ method that parses the raw response into a validated model instance.
 - **THEN** the `RawResponse` includes `content`, `model`, `latency_ms`, `status`, `attempts`, `finish_reason`, `usage`, `http_status`, and `error`
 
 ### Requirement: Call-type wrappers
-The client SHALL provide `extract_theses` and `extract_theses_many` methods
-that pass a `call_type` identifier into log entries and use per-call defaults
-for `system_prompt`, `max_tokens`, and `truncate_tokens`. The client SHALL NOT
-provide `classify` or `classify_many` methods; classification is performed
-through the candidate-scoring architecture, not through generative LLM calls.
+The client SHALL provide an `extract_theses` method that passes a `call_type`
+identifier into log entries and uses per-call defaults for `system_prompt`,
+`max_tokens`, and `truncate_tokens`. The client SHALL NOT provide `classify`,
+`classify_many`, `extract_theses_many`, or other batch wrapper methods;
+classification is performed through the candidate-scoring architecture, not
+through generative LLM calls, and batch fan-out is the caller's responsibility
+(`asyncio.gather` with a semaphore in the runner).
 
 #### Scenario: extract_theses uses extraction defaults
 - **WHEN** `extract_theses` is called without explicit `truncate_tokens` or `max_tokens`
@@ -132,27 +134,31 @@ deterministic model output.
 - **THEN** `top_p` is `1.0`
 
 ### Requirement: Backend detection failure raises error
-The `detect_backend` method SHALL raise an error when it cannot identify the
-backend from the server's model list, rather than silently defaulting to a
-generic OpenAI adapter.
+The client SHALL require an explicit backend (constructor argument or
+`[llm].backend` config) and SHALL raise a configuration error when no backend
+is specified, rather than silently defaulting to a generic OpenAI adapter.
 
-#### Scenario: Unknown owned_by value
-- **WHEN** `detect_backend` queries a server whose `owned_by` field is not recognized
-- **THEN** it raises an error indicating the backend could not be determined, rather than silently returning a default
+#### Scenario: Missing backend raises
+- **WHEN** the client is constructed without a backend and config provides none
+- **THEN** it raises a `ConfigError` naming the missing backend key
+
+#### Scenario: No silent generic default
+- **WHEN** the backend cannot be determined
+- **THEN** the client fails with an explicit error rather than falling back to a generic adapter
 
 ### Requirement: Smoke test readiness gate
-The project SHALL include a `smoke_test.py` script that verifies the transport
-layer end-to-end against a running server and exits with code 0 on success,
-non-zero on failure. The smoke test SHALL exercise `extract_theses` calls and
-SHALL NOT exercise `classify` calls, because classification is performed through
-candidate scoring, not generative LLM calls.
+The project SHALL include an integration smoke test (`tests/integration/test_smoke.py`)
+that verifies the transport layer end-to-end against a running server and exits
+with code 0 on success, non-zero on failure. The smoke test SHALL exercise
+`extract_theses` calls and SHALL NOT exercise `classify` calls, because
+classification is performed through candidate scoring, not generative LLM calls.
 
 #### Scenario: Successful smoke test
-- **WHEN** the server is running and `smoke_test.py` is executed
+- **WHEN** the server is running and the smoke test is executed
 - **THEN** it performs extract_theses calls, checks the jsonl log, verifies analyze_raw composition, checks determinism, and exits 0
 
 #### Scenario: Smoke test on unreachable server
-- **WHEN** the server is not running and `smoke_test.py` is executed
+- **WHEN** the server is not running and the smoke test is executed
 - **THEN** it exits with a non-zero code and an error message
 
 #### Scenario: Structured mode probe
@@ -163,8 +169,8 @@ candidate scoring, not generative LLM calls.
 The client SHALL provide a `CallResult` return type that bundles the parsed
 model instance, the raw response content, `latency_ms`, `parse_status`,
 transport `status`, `finish_reason`, `error`, and `truncated` for a single call.
-The existing `extract_theses` / `extract_theses_many` wrappers SHALL remain
-unchanged and continue to return the parsed model or `None`.
+The existing `extract_theses` wrapper SHALL remain unchanged and continue to
+return the parsed model or `None`.
 
 #### Scenario: CallResult carries parsed and raw
 - **WHEN** a rich-result call succeeds with valid JSON matching the schema
@@ -174,7 +180,7 @@ unchanged and continue to return the parsed model or `None`.
 - **WHEN** a rich-result call receives invalid JSON
 - **THEN** the `CallResult` has `parsed=None`, `raw_content` holding the raw string, and `parse_status` set to the failure category
 
-#### Scenario: Existing wrappers unchanged
+#### Scenario: Existing wrapper unchanged
 - **WHEN** `extract_theses` is called as before
 - **THEN** it returns the parsed model or `None` with no change to its signature or behavior
 
@@ -189,20 +195,15 @@ The client SHALL NOT provide `classify_detailed`.
 - **WHEN** `extract_theses_detailed` is called without explicit `truncate_tokens` or `max_tokens`
 - **THEN** it uses extraction defaults (`truncate_tokens=2000`, `max_tokens=512`)
 
-### Requirement: Rich-result batch methods
-The client SHALL provide `extract_theses_many_detailed` method that returns a
-list of `CallResult` in the same order as the input texts, executes with a
-configurable concurrency limit, and logs every request when a `log_path` is
-configured. The client SHALL NOT provide `classify_many_detailed`.
+### Requirement: Batch methods are absent
+The client SHALL NOT provide `extract_theses_many_detailed`, `classify_many_detailed`,
+or other batch methods; batch fan-out over single-call methods is the caller's
+responsibility.
 
-#### Scenario: Batch returns rich results in order
-- **WHEN** `extract_theses_many_detailed` is called with N texts
-- **THEN** it returns N `CallResult` objects whose order matches the input texts
+#### Scenario: No batch methods on the client
+- **WHEN** the client's public surface is inspected
+- **THEN** no `*_many*` methods exist
 
-#### Scenario: Batch concurrency honored
-- **WHEN** `extract_theses_many_detailed` is called with `concurrency=4`
-- **THEN** no more than 4 requests execute simultaneously
-
-#### Scenario: Batch logs every request
-- **WHEN** `extract_theses_many_detailed` is called with a `log_path` configured on N texts
-- **THEN** exactly N jsonl log entries are written
+#### Scenario: Caller owns concurrency
+- **WHEN** multiple extraction calls are needed
+- **THEN** the caller fans out with its own concurrency limit (e.g., `asyncio.gather` with a semaphore)

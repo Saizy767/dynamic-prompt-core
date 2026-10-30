@@ -1,4 +1,5 @@
 """Domain models for datasets: Record, Dataset, DatasetConfig."""
+
 from __future__ import annotations
 
 import tomllib

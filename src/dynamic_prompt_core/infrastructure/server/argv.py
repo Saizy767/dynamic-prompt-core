@@ -1,4 +1,5 @@
 """Command-line argv builders for LLM server backends."""
+
 from __future__ import annotations
 
 import sys
@@ -38,13 +39,20 @@ def _build_llamacpp_argv(cfg: dict[str, Any]) -> list[str]:
         )
     argv = [
         "llama-server",
-        "-m", str(cfg["gguf_path"]),
-        "--host", str(cfg["host"]),
-        "--port", str(cfg["port"]),
-        "-c", str(cfg.get("ctx_size", 4096)),
-        "-ngl", str(cfg.get("gpu_layers", 0)),
-        "-t", str(cfg.get("threads", 4)),
-        "--alias", str(cfg["served_model_name"]),
+        "-m",
+        str(cfg["gguf_path"]),
+        "--host",
+        str(cfg["host"]),
+        "--port",
+        str(cfg["port"]),
+        "-c",
+        str(cfg.get("ctx_size", 4096)),
+        "-ngl",
+        str(cfg.get("gpu_layers", 0)),
+        "-t",
+        str(cfg.get("threads", 4)),
+        "--alias",
+        str(cfg["served_model_name"]),
         "--jinja",
     ]
     extra = cfg.get("llamacpp", {}).get("extra_args", [])
@@ -55,11 +63,15 @@ def _build_llamacpp_argv(cfg: dict[str, Any]) -> list[str]:
 
 def _build_vllm_argv(cfg: dict[str, Any]) -> list[str]:
     argv = [
-        "vllm", "serve",
+        "vllm",
+        "serve",
         str(cfg["model_path"]),
-        "--host", str(cfg["host"]),
-        "--port", str(cfg["port"]),
-        "--max-model-len", str(cfg.get("ctx_size", 4096)),
+        "--host",
+        str(cfg["host"]),
+        "--port",
+        str(cfg["port"]),
+        "--max-model-len",
+        str(cfg.get("ctx_size", 4096)),
     ]
     vllm_opts = cfg.get("vllm", {})
     if "gpu_memory_utilization" in vllm_opts:

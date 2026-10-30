@@ -1,4 +1,5 @@
 """Errors for the LLM transport layer."""
+
 from __future__ import annotations
 
 

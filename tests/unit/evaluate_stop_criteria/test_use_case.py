@@ -1,4 +1,5 @@
 """Unit tests for the evaluate_stop_criteria use case."""
+
 from __future__ import annotations
 
 import json
@@ -22,6 +23,13 @@ class _MockRunRepository:
         self.saved_paths: list[str] = []
 
     def save_results(self, results: list[dict[str, Any]], run_id: str, path: str) -> str:
+        self.saved_paths.append(path)
+        return path
+
+    def save_artifact(self, path: str, payload: str) -> str:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(payload)
         self.saved_paths.append(path)
         return path
 

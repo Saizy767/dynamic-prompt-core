@@ -1,4 +1,5 @@
 """Base prompt layers and artifacts for the classification pipeline."""
+
 from __future__ import annotations
 
 import hashlib
@@ -8,6 +9,7 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class PromptLayer:
     """The five semantic layers of a classification prompt."""
+
     role: str
     task: str
     rules: list[str]
@@ -48,9 +50,7 @@ def parse_prompt_layers(text: str) -> PromptLayer:
     if not m:
         raise ValueError("prompt text does not match the expected rendered format")
     role, task, rules_text, output_contract, fallback = m.groups()
-    rules = [
-        line[2:] for line in rules_text.strip().split("\n") if line.startswith("- ")
-    ]
+    rules = [line[2:] for line in rules_text.strip().split("\n") if line.startswith("- ")]
     return PromptLayer(
         role=role,
         task=task,
@@ -63,6 +63,7 @@ def parse_prompt_layers(text: str) -> PromptLayer:
 @dataclass(frozen=True)
 class PromptArtifact:
     """A versioned, hashed prompt artifact ready to pass to the client."""
+
     version: str
     layers: PromptLayer | None
     text: str
@@ -71,6 +72,7 @@ class PromptArtifact:
     def __post_init__(self) -> None:
         if not self.sha256:
             object.__setattr__(
-                self, "sha256",
-                hashlib.sha256(self.text.encode("utf-8")).hexdigest()[:16],
+                self,
+                "sha256",
+                hashlib.sha256(self.text.encode("utf-8")).hexdigest(),
             )

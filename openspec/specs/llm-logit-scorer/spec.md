@@ -10,31 +10,32 @@ the infrastructure layer behind the application port.
 
 ## Requirements
 
-### Requirement: Concrete CandidateScorer implementation
-A concrete `CandidateScorer` implementation SHALL be provided in infrastructure
+### Requirement: Concrete Classifier implementation
+A concrete logit-scoring implementation SHALL be provided in infrastructure
 that derives candidate scores from LLM logits. The implementation SHALL satisfy
-the `CandidateScorer` port contract: `async def score(text, candidates, rules)
--> list[Judgment]`, returning exactly one `Judgment` per supplied candidate. The
+the `Classifier` port contract: `async def classify(text, rules) ->
+Classification`, with the candidate set injected at construction time and one
+`Judgment` per constructor candidate inside the returned `Classification`. The
 implementation's constructor MAY depend on infrastructure-specific
 collaborators (tokenizer adapter, model adapter, prompt builder, logit scorer);
-those collaborators SHALL NOT appear in the `CandidateScorer` port. The
-application SHALL see only `await scorer.score(text, candidates, rules)`.
+those collaborators SHALL NOT appear in the `Classifier` port. The application
+SHALL see only `await classifier.classify(text, rules)`.
 
 #### Scenario: Port contract satisfied
-- **WHEN** the concrete scorer is invoked
-- **THEN** it satisfies the `CandidateScorer` port contract
+- **WHEN** the concrete classifier is invoked
+- **THEN** it satisfies the `Classifier` port contract
 
 #### Scenario: One judgment per candidate
-- **WHEN** the concrete scorer successfully evaluates N candidates
-- **THEN** it returns exactly N judgments
+- **WHEN** the concrete classifier successfully evaluates N constructor candidates
+- **THEN** the returned `Classification` contains exactly N judgments
 
 #### Scenario: Infrastructure collaborators not in port
-- **WHEN** the `CandidateScorer` port is inspected
+- **WHEN** the `Classifier` port is inspected
 - **THEN** it exposes no tokenizer adapter, model adapter, prompt builder, or logit scorer
 
-#### Scenario: Application sees only score
-- **WHEN** the application invokes the scorer
-- **THEN** it calls `await scorer.score(text, candidates, rules)` and receives judgments
+#### Scenario: Application sees only classify
+- **WHEN** the application invokes the classifier
+- **THEN** it calls `await classifier.classify(text, rules)` and receives a `Classification`
 
 ### Requirement: Prompt construction in infrastructure
 Prompt construction SHALL be owned entirely by infrastructure. The scorer
@@ -184,25 +185,24 @@ an intentional consequence of the prompt format.
 
 ### Requirement: Tokenization boundary determination
 The backend SHALL determine the boundary between the prefix tokens and the
-candidate tokens by encoding the prefix and the candidate as separate tokenizer
-inputs and composing the full sequence, NOT by encoding the full prompt and
-then searching for the candidate substring or candidate tokens via string
-matching. The prefix SHALL be the prompt text up to and including the candidate
-label (e.g., `"{input}\nCandidate: "`); the candidate SHALL be `candidate.value`.
-The backend SHALL record `prefix_token_count` and `candidate_token_ids` from the
-two encodings. The full sequence SHALL be `prefix_tokens + candidate_tokens`.
-Determining candidate token positions by substring search, token subsequence
-matching, or any post-hoc alignment heuristic SHALL NOT be permitted, because
-tokenizers may merge or split tokens across the boundary in ways that make such
-searches unreliable.
+candidate tokens by encoding the full prompt (prefix + candidate) and
+verifying that the prefix's own token sequence forms an exact token-level
+prefix of the full encoding. The prefix SHALL be the prompt text up to and
+including the candidate label (e.g., `"{input}\nCandidate: "`); the candidate
+SHALL be `candidate.value`. The backend SHALL record `prefix_token_count` and
+`candidate_token_ids` from this verification. Determining candidate token
+positions by substring search, token subsequence matching, or any post-hoc
+alignment heuristic other than exact-prefix verification SHALL NOT be
+permitted, because tokenizers may merge or split tokens across the boundary in
+ways that make such searches unreliable.
 
-#### Scenario: Boundary determined by separate encoding
+#### Scenario: Boundary determined by prefix verification
 - **WHEN** the backend tokenizes a scoring prompt
-- **THEN** it encodes the prefix and the candidate separately and composes the full sequence
+- **THEN** it encodes the full sequence and verifies the prefix tokens form an exact prefix
 
 #### Scenario: Prefix token count recorded
 - **WHEN** the backend tokenizes a scoring prompt
-- **THEN** the prefix token count is known from the prefix encoding, not from post-hoc search
+- **THEN** the prefix token count is known from the exact-prefix verification, not from post-hoc search
 
 #### Scenario: No substring search for candidate positions
 - **WHEN** the backend determines candidate token positions
@@ -377,27 +377,27 @@ valid range. `Judgment`'s own domain invariant SHALL remain the final guard.
 - **THEN** the backend does not silently clamp it into a different range
 
 ### Requirement: Multi-candidate API is an application contract not a model batch
-`CandidateScorer.score()` SHALL accept multiple candidates in one invocation.
-This is an application-level contract: one invocation evaluates a set of
-candidates. The implementation MAY evaluate candidates sequentially (one model
-forward per candidate) or batch them; the application SHALL NOT know or care
+The `Classifier` port SHALL evaluate the full constructor candidate set in one
+`classify(text, rules)` invocation. This is an application-level contract: one
+invocation evaluates a set of candidates. The implementation MAY evaluate
+candidates sequentially or batch them; the application SHALL NOT know or care
 which strategy is used. The multi-candidate API SHALL NOT be interpreted as a
 requirement that the implementation perform a single batched model forward.
 Batching, prefix reuse, and provider batch APIs are implementation
 optimizations that SHALL NOT change the application contract. The backend design
 SHALL NOT prevent future batching or prefix reuse.
 
-#### Scenario: Multiple candidates in one call
-- **WHEN** the scorer is invoked with multiple candidates
-- **THEN** all candidates are evaluated in a single invocation
+#### Scenario: Full candidate set in one call
+- **WHEN** the classifier is invoked
+- **THEN** all constructor candidates are evaluated in a single invocation
 
 #### Scenario: Sequential evaluation is valid
-- **WHEN** the implementation evaluates candidates one model forward at a time
+- **WHEN** the implementation evaluates candidates one model call at a time
 - **THEN** the multi-candidate application contract is satisfied
 
 #### Scenario: Batching is internal
 - **WHEN** the implementation evaluates multiple candidates
-- **THEN** the application does not know whether batching occurred
+- **THEN** the application does not know which strategy was used
 
 #### Scenario: Backend does not prevent batching
 - **WHEN** the backend design is inspected
@@ -441,21 +441,21 @@ batched.
 - **THEN** the mechanism (thread offloading, executor, etc.) is chosen by infrastructure, not prescribed by the port
 
 ### Requirement: Application-facing scoring error
-The application-facing scoring error SHALL reside in the application layer
-(`application/errors/scoring.py`) as `CandidateScoringError`. The application
-SHALL NOT import infrastructure error classes. The infrastructure SHALL define
-its own internal error (`LLMScoringError` in
+The application-facing scoring error SHALL reside in the domain layer
+(`domain/errors/scoring.py`) as `CandidateScoringError` — a domain-owned error
+importable by both application and infrastructure without layering violations.
+The application SHALL NOT import infrastructure error classes. The
+infrastructure SHALL define its own internal error (`LLMScoringError` in
 `infrastructure/llm/scoring/errors.py`) for wrapping library-specific failures
-and invalid scores before translation. The `LLMLogitCandidateScorer` SHALL
-translate `LLMScoringError` and raw infrastructure exceptions (torch,
-transformers, provider SDK, tokenizer) into `CandidateScoringError` with the
-original as `__cause__`. The application SHALL receive only
-`CandidateScoringError`, never raw infrastructure exceptions or
-`LLMScoringError`.
+and invalid scores before translation. The concrete classifier SHALL translate
+`LLMScoringError` and raw infrastructure exceptions (HTTP, provider SDK,
+tokenizer) into `CandidateScoringError` with the original as `__cause__`. The
+application SHALL receive only `CandidateScoringError`, never raw
+infrastructure exceptions or `LLMScoringError`.
 
-#### Scenario: Application error in application layer
+#### Scenario: Application error in domain layer
 - **WHEN** the application-facing scoring error is located
-- **THEN** it resides in `application/errors/scoring.py`
+- **THEN** it resides in `domain/errors/scoring.py`
 
 #### Scenario: Infrastructure error is infrastructure-internal
 - **WHEN** the infrastructure scoring error is located
@@ -467,7 +467,7 @@ original as `__cause__`. The application SHALL receive only
 
 #### Scenario: No raw infrastructure exceptions leak
 - **WHEN** the application receives a scoring failure
-- **THEN** it is a `CandidateScoringError`, not a raw torch, transformers, provider SDK, tokenizer, or `LLMScoringError` exception
+- **THEN** it is a `CandidateScoringError`, not a raw HTTP, provider SDK, tokenizer, or `LLMScoringError` exception
 
 ### Requirement: Atomic scoring failure semantics
 A scoring invocation SHALL be atomic from the application's perspective. If the
@@ -543,31 +543,34 @@ model/tokenizer dependencies.
 - **THEN** it is opt-in, isolated from the default suite, and explicit about dependencies
 
 ### Requirement: Batched model inference for one scoring invocation
-The standard `LLMLogitCandidateScorer` implementation SHALL evaluate all
-candidates from one `score(text, candidates)` invocation through a single
-batched model forward pass rather than one forward pass per candidate. For
-`N` candidates, the scorer SHALL perform exactly `1` batched model forward
-call. The batch SHALL consist of all candidate prompts belonging to that
-scoring invocation. The batch SHALL NOT combine candidates from different
-`text` values. The application SHALL NOT know whether scoring used one batched
-call, several calls, or sequential execution; batching remains an
-infrastructure implementation detail behind the `CandidateScorer` port.
+The standard logit-scoring implementation SHALL evaluate all constructor
+candidates from one `classify(text, rules)` invocation through a single
+`forward_batch` call on the model seam rather than one model call per
+candidate. For `N` candidates, the scorer SHALL perform exactly `1`
+`forward_batch` invocation over the batch of all candidate prompts belonging
+to that classification. The batch SHALL NOT combine candidates from different
+`text` values. How the model seam physically executes the batch is a backend
+implementation detail: the llama-server backend issues concurrent
+per-candidate-token HTTP requests (see the llama-server-logit-scorer spec);
+in-process backends MAY use a single tensor batch. The application SHALL NOT
+know which execution strategy was used; batching remains an infrastructure
+implementation detail behind the `Classifier` port.
 
-#### Scenario: One forward call for multiple candidates
-- **WHEN** the scorer evaluates `N` candidates in one invocation
+#### Scenario: One forward_batch call for multiple candidates
+- **WHEN** the classifier evaluates `N` candidates in one invocation
 - **THEN** the model seam is invoked exactly once with a batch containing all `N` candidate prompts
 
 #### Scenario: Batch contains all candidates from one invocation
-- **WHEN** the scorer is invoked with candidates `[a, b, c]`
-- **THEN** the batch forwarded to the model contains exactly the prompts for `a`, `b`, and `c`
+- **WHEN** the classifier is invoked with constructor candidates `[a, b, c]`
+- **THEN** the batch forwarded to the model seam contains exactly the prompts for `a`, `b`, and `c`
 
 #### Scenario: Batch does not combine different inputs
-- **WHEN** the scorer is invoked with one `text` and a candidate set
+- **WHEN** the classifier is invoked with one `text`
 - **THEN** the batch contains only prompts derived from that `text`
 
 #### Scenario: Application unaware of batching
-- **WHEN** the application inspects the scoring result
-- **THEN** it cannot determine whether batching occurred
+- **WHEN** the application inspects the classification result
+- **THEN** it cannot determine which batch execution strategy the backend used
 
 ### Requirement: Batch-capable model seam
 The infrastructure SHALL provide a batch-capable model seam that executes one
@@ -846,17 +849,18 @@ application and SHALL preserve candidate ordering and score semantics.
 - **WHEN** the `CandidateScorer` port contract is inspected
 - **THEN** it exposes no `max_batch_size` or batch-sizing configuration
 
-### Requirement: Batch scoring preserves existing port and information boundary
-The `CandidateScorer` port, `ClassifyInput`, `Classification`, `Judgment`,
-and `ClassificationPolicy` SHALL remain unchanged. No model, tokenizer,
-tensor, padding, attention mask, or batch structure details SHALL leak into
-domain or application. Batch scoring SHALL be additive to the infrastructure
-layer only. The generative classification path SHALL NOT exist; candidate
-scoring is the sole classification mechanism.
+### Requirement: Batch scoring preserves the port and information boundary
+The `Classifier` port, `Classification`, and `Judgment` SHALL remain the stable
+application contract; the retired `CandidateScorer` port, `ClassifyInput`, and
+`ClassificationPolicy` SHALL remain absent (superseded by the classifier spec).
+No model, tokenizer, tensor, padding, attention mask, or batch structure
+details SHALL leak into domain or application. Batch scoring SHALL be additive
+to the infrastructure layer only. The generative classification path SHALL NOT
+exist; candidate scoring is the sole classification mechanism.
 
-#### Scenario: Port contract unchanged
-- **WHEN** the `CandidateScorer` port is inspected after batch scoring is introduced
-- **THEN** its signature and semantics are identical to before
+#### Scenario: Port contract stable
+- **WHEN** the `Classifier` port is inspected
+- **THEN** its signature and semantics match the classifier spec
 
 #### Scenario: No batch internals leak to domain or application
 - **WHEN** the domain and application layers are inspected

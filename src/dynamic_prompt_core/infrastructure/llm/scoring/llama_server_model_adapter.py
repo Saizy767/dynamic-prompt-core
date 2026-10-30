@@ -18,6 +18,7 @@ Because the prompt for candidate token ``k`` is fully determined upfront
 concurrently, bounded by the adapter semaphore and the server's prompt
 cache (shared prefixes are evaluated once server-side).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -115,7 +116,9 @@ class LlamaServerCausalLMAdapter:
                 last_exc = exc
                 log.warning(
                     "llama-server disconnected (attempt %d/%d), retrying in %.1fs",
-                    attempt + 1, _MAX_RETRIES, _RETRY_DELAY_S,
+                    attempt + 1,
+                    _MAX_RETRIES,
+                    _RETRY_DELAY_S,
                 )
                 await self._safe_close_session()
                 await asyncio.sleep(_RETRY_DELAY_S)
@@ -123,7 +126,9 @@ class LlamaServerCausalLMAdapter:
                 last_exc = exc
                 log.warning(
                     "llama-server connection error (attempt %d/%d), retrying in %.1fs",
-                    attempt + 1, _MAX_RETRIES, _RETRY_DELAY_S,
+                    attempt + 1,
+                    _MAX_RETRIES,
+                    _RETRY_DELAY_S,
                 )
                 await self._safe_close_session()
                 await asyncio.sleep(_RETRY_DELAY_S)
@@ -159,8 +164,7 @@ class LlamaServerCausalLMAdapter:
             ) from exc
         except TimeoutError as exc:
             raise LLMScoringError(
-                f"request to llama-server at {self._endpoint} timed out "
-                f"after {self._timeout}s"
+                f"request to llama-server at {self._endpoint} timed out after {self._timeout}s"
             ) from exc
         except LLMScoringError:
             raise
@@ -189,9 +193,7 @@ class LlamaServerCausalLMAdapter:
                 "candidate_token_ids; the logit_bias forcing mechanism "
                 "cannot determine which tokens to force without them"
             )
-        if len(prefix_token_counts) != len(input_ids) or len(candidate_token_ids) != len(
-            input_ids
-        ):
+        if len(prefix_token_counts) != len(input_ids) or len(candidate_token_ids) != len(input_ids):
             raise LLMScoringError(
                 f"prefix_token_counts ({len(prefix_token_counts)}) and "
                 f"candidate_token_ids ({len(candidate_token_ids)}) must "
@@ -200,9 +202,7 @@ class LlamaServerCausalLMAdapter:
         if not input_ids:
             return BatchedLogits(items=())
 
-        async def _gated_logprob(
-            prompt_ids: list[int], forced_id: int
-        ) -> float:
+        async def _gated_logprob(prompt_ids: list[int], forced_id: int) -> float:
             async with self._semaphore:
                 return await self._forced_token_logprob(prompt_ids, forced_id)
 
@@ -213,8 +213,7 @@ class LlamaServerCausalLMAdapter:
         ) -> SequenceLogits:
             vocab_size = max(unpadded + cand_ids) + 1 if unpadded else 1
             per_position: list[SparseLogitVector] = [
-                SparseLogitVector(-1, _LOGIT_FLOOR, _LOGIT_FLOOR, vocab_size)
-                for _ in unpadded
+                SparseLogitVector(-1, _LOGIT_FLOOR, _LOGIT_FLOOR, vocab_size) for _ in unpadded
             ]
             requests = await asyncio.gather(
                 *(
@@ -233,11 +232,7 @@ class LlamaServerCausalLMAdapter:
         unpadded_items: list[list[int]] = []
         for ids, mask in zip(input_ids, attention_mask, strict=True):
             unpadded_items.append(
-                [
-                    token_id
-                    for token_id, m in zip(ids, mask, strict=True)
-                    if m == 1
-                ]
+                [token_id for token_id, m in zip(ids, mask, strict=True) if m == 1]
             )
 
         log.debug(
@@ -283,9 +278,7 @@ class LlamaServerCausalLMAdapter:
             if self._gguf_path and os.path.isfile(self._gguf_path):
                 try:
                     with open(self._gguf_path, "rb") as f:
-                        self._gguf_checksum = hashlib.file_digest(
-                            f, "sha256"
-                        ).hexdigest()
+                        self._gguf_checksum = hashlib.file_digest(f, "sha256").hexdigest()
                 except OSError:
                     log.warning(
                         "could not read gguf %s for model checksum",
@@ -327,14 +320,12 @@ def _parse_forced_logprob(body: dict[str, Any], forced_token_id: int) -> float:
     content = logprobs_data.get("content")
     if not isinstance(content, list) or not content:
         raise LLMScoringError(
-            f"v1/completions response missing logprobs content; "
-            f"excerpt: {str(body)[:200]}"
+            f"v1/completions response missing logprobs content; excerpt: {str(body)[:200]}"
         )
     entry = content[0]
     if not isinstance(entry, dict) or "logprob" not in entry or "id" not in entry:
         raise LLMScoringError(
-            f"v1/completions logprobs entry missing id/logprob; "
-            f"excerpt: {str(body)[:200]}"
+            f"v1/completions logprobs entry missing id/logprob; excerpt: {str(body)[:200]}"
         )
     generated_id = int(entry["id"])
     if generated_id != forced_token_id:

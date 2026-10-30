@@ -1,4 +1,5 @@
 """Public API for the storage infrastructure package."""
+
 from __future__ import annotations
 
 from dynamic_prompt_core.infrastructure.storage.prompt_store import (

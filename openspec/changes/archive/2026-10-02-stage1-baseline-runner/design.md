@@ -50,11 +50,11 @@ fill the slot with `None`, so a batch never raises on a single failure.
 ```python
 @dataclass
 class CallResult:
-    parsed: Optional[BaseModel]   # validated model or None
-    raw_content: Optional[str]    # raw string from the model
+    parsed: Optional[BaseModel]  # validated model or None
+    raw_content: Optional[str]  # raw string from the model
     latency_ms: float
-    parse_status: Optional[ParseStatus]   # ok/invalid_json/schema_mismatch/truncated
-    status: ResponseStatus                 # ok/empty/error/timeout
+    parse_status: Optional[ParseStatus]  # ok/invalid_json/schema_mismatch/truncated
+    status: ResponseStatus  # ok/empty/error/timeout
     finish_reason: Optional[str]
     error: Optional[str]
     truncated: bool
@@ -132,13 +132,14 @@ atomic on POSIX, so the final artifact is never partially written.
 ```python
 NEGATION_PARTICLES = {"не", "нет", "без", "никогда"}
 
+
 def normalize_thesis(text: str, lang: str) -> str:
     words = text.split()
     out = []
     for w in words:
         lw = w.lower()
         if lw in NEGATION_PARTICLES:
-            out.append(lw)          # pass through, never lemmatize
+            out.append(lw)  # pass through, never lemmatize
         else:
             out.append(lemmatize(lw, lang))
     return re.sub(r"\s+", " ", " ".join(out)).strip()

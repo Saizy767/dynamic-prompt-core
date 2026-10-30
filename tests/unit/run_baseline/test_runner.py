@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -21,6 +21,7 @@ from dynamic_prompt_core.domain.models.classification_rules import Classificatio
 from dynamic_prompt_core.domain.models.judgment import Judgment
 from dynamic_prompt_core.domain.prompts import CLASSIFICATION_PROMPT_V0, PromptArtifact
 from dynamic_prompt_core.domain.prompts.base import PromptLayer
+from dynamic_prompt_core.infrastructure.data.writer import FileDatasetRepository
 from dynamic_prompt_core.infrastructure.llm import CallResult, ResponseStatus
 from dynamic_prompt_core.infrastructure.llm.extractor import ExtractionResult
 
@@ -38,9 +39,11 @@ def _make_candidates() -> list[Candidate]:
 
 def _prompt_with_rules(rules: list[str] | None = None) -> PromptArtifact:
     layers = PromptLayer(
-        role="role", task="task",
+        role="role",
+        task="task",
         rules=rules or ["rule a", "rule b", "rule c"],
-        output_contract="contract", fallback="fallback",
+        output_contract="contract",
+        fallback="fallback",
     )
     return PromptArtifact(version="test", layers=layers, text="test")
 
@@ -119,6 +122,7 @@ def _make_runner(
     cands = candidates or _make_candidates()
     config = RunnerConfig()
     runner = BaselineRunner(
+        dataset_repository=FileDatasetRepository(),
         classifier=classifier or FakeClassifier(_default_classification(cands)),
         extractor=extractor or FakeExtractor(_make_extract_result()),
         config=config,
@@ -149,7 +153,7 @@ async def test_process_example_classifies_via_candidate_scoring() -> None:
     example = _FakeRecord(id=1, text="some text", label=1)
     results: list[ResultRow | None] = [None]
 
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     classifier.classify.assert_called_once()
     row = results[0]
@@ -171,7 +175,7 @@ async def test_process_example_scoring_failure_maps_to_failed() -> None:
     example = _FakeRecord(id=2, text="text", label=0)
     results: list[ResultRow | None] = [None]
 
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     row = results[0]
     assert row is not None
@@ -200,7 +204,7 @@ async def test_process_example_candidate_ordering_preserved() -> None:
     example = _FakeRecord(id=3, text="text", label=1)
     results: list[ResultRow | None] = [None]
 
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     row = results[0]
     assert row is not None
@@ -238,7 +242,7 @@ async def test_predicted_decision_integer_conversion() -> None:
     example = _FakeRecord(id=1, text="text", label=1)
     results: list[ResultRow | None] = [None]
 
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     row = results[0]
     assert row is not None
@@ -264,7 +268,7 @@ async def test_predicted_decision_non_integer_falls_back_to_none() -> None:
     example = _FakeRecord(id=2, text="text", label=1)
     results: list[ResultRow | None] = [None]
 
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     row = results[0]
     assert row is not None
@@ -290,7 +294,7 @@ async def test_judgment_scores_populated_from_classification_judgments() -> None
     example = _FakeRecord(id=3, text="text", label=1)
     results: list[ResultRow | None] = [None]
 
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     row = results[0]
     assert row is not None
@@ -306,6 +310,7 @@ async def test_runner_skip_extraction() -> None:
     extractor = FakeExtractor(_make_extract_result())
 
     runner = BaselineRunner(
+        dataset_repository=FileDatasetRepository(),
         classifier=classifier,
         extractor=extractor,
         config=RunnerConfig(),
@@ -320,7 +325,7 @@ async def test_runner_skip_extraction() -> None:
     example = _FakeRecord(id=1, text="some text", label=1)
     results: list[ResultRow | None] = [None]
 
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     extractor.extract.assert_not_called()
     classifier.classify.assert_called_once()
@@ -344,6 +349,7 @@ async def test_stats_no_double_count() -> None:
     extractor = FakeExtractor(_make_extract_result(status="ok"))
 
     runner = BaselineRunner(
+        dataset_repository=FileDatasetRepository(),
         classifier=classifier,
         extractor=extractor,
         config=RunnerConfig(),
@@ -355,7 +361,7 @@ async def test_stats_no_double_count() -> None:
 
     example = _FakeRecord(id=1, text="some text", label=1)
     results: list[ResultRow | None] = [None]
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     assert runner._stats["ok"] == 1
     assert runner._stats["classify_ok"] == 1
@@ -386,6 +392,7 @@ def test_non_default_prompt_with_valid_layers_rules_extracted() -> None:
         text="rendered text",
     )
     runner = BaselineRunner(
+        dataset_repository=FileDatasetRepository(),
         classifier=FakeClassifier(_default_classification(_make_candidates())),
         extractor=FakeExtractor(_make_extract_result()),
         config=RunnerConfig(),
@@ -411,6 +418,7 @@ async def test_non_default_prompt_with_none_layers_uses_empty_rules() -> None:
     classifier = FakeClassifier(_default_classification(_make_candidates()))
     extractor = FakeExtractor(_make_extract_result())
     runner = BaselineRunner(
+        dataset_repository=FileDatasetRepository(),
         classifier=classifier,
         extractor=extractor,
         config=RunnerConfig(),
@@ -424,7 +432,7 @@ async def test_non_default_prompt_with_none_layers_uses_empty_rules() -> None:
 
     example = _FakeRecord(id=1, text="text", label=0)
     results: list[ResultRow | None] = [None]
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     classifier.classify.assert_not_called()
     row = results[0]
@@ -443,6 +451,7 @@ async def test_v0_empty_rules_still_calls_classifier() -> None:
     classifier = FakeClassifier(classification)
     extractor = FakeExtractor(_make_extract_result())
     runner = BaselineRunner(
+        dataset_repository=FileDatasetRepository(),
         classifier=classifier,
         extractor=extractor,
         config=RunnerConfig(),
@@ -455,7 +464,7 @@ async def test_v0_empty_rules_still_calls_classifier() -> None:
 
     example = _FakeRecord(id=1, text="text", label=1)
     results: list[ResultRow | None] = [None]
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     classifier.classify.assert_called_once()
     row = results[0]
@@ -475,7 +484,7 @@ async def test_rules_passed_to_classifier_on_classify() -> None:
     example = _FakeRecord(id=1, text="text", label=1)
     results: list[ResultRow | None] = [None]
 
-    await runner._process_example(MagicMock(), example, 0, results)
+    await runner._process_example(example, 0, results)
 
     call_args = classifier.classify.call_args
     assert call_args.args[1] == runner._rules

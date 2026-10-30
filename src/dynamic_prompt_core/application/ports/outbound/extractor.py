@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
-
-if TYPE_CHECKING:
-    import aiohttp
+from typing import Protocol, runtime_checkable
 
 
 class ExtractionResult(Protocol):
@@ -38,16 +35,20 @@ class Extractor(Protocol):
     """Outbound port: extract key phrases from input text.
 
     The extractor performs an independent model call with its own system
-    prompt.  It does not receive classification results.
+    prompt.  It does not receive classification results.  Implementations
+    own their HTTP transport; callers release it with ``aclose``.
     """
 
     async def extract(
         self,
-        session: aiohttp.ClientSession,
         text: str,
         true_val: int | None = None,
     ) -> ExtractionResult:
         """Extract key phrases from ``text``."""
+        ...
+
+    async def aclose(self) -> None:
+        """Release the underlying transport resources."""
         ...
 
     @staticmethod

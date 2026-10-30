@@ -1,11 +1,12 @@
 """Unit tests for run metadata recording and resume identity verification."""
+
 from __future__ import annotations
 
 import json
 
 import pytest
 
-from dynamic_prompt_core.infrastructure.storage.run_metadata import (
+from dynamic_prompt_core.application.use_cases.run_baseline.run_metadata import (
     RunMetadata,
     build_run_metadata,
     load_manifest,

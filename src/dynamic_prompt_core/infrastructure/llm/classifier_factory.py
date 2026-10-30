@@ -4,6 +4,7 @@ Constructs an ``LLMLogitClassifier`` with all infrastructure dependencies
 from a ``ScorerBackendConfig``.  The result structurally satisfies the
 ``Classifier`` port; callers consume it through the port.
 """
+
 from __future__ import annotations
 
 import logging
@@ -41,7 +42,8 @@ def build_classifier(
     assert config.llama_server is not None
     log.info(
         "Building classifier: backend=%s, endpoint=%s",
-        config.backend, config.llama_server.endpoint,
+        config.backend,
+        config.llama_server.endpoint,
     )
     if config.backend == "llama_server":
         tokenizer, model = _build_llama_server_adapters(config)

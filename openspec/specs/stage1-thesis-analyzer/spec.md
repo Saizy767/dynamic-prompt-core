@@ -28,8 +28,10 @@ The component SHALL maintain a thesis bank in memory. Each thesis SHALL be keyed
 by its normalized form. For each thesis the component SHALL store: `text_raw`
 (last raw form), `text_norm` (normalized form), `embedding` (embedding vector),
 `precision` (share of `positive_hits` over total occurrences), `frequency`
-(total occurrences across all runs), `positive_hits` (occurrences in texts with
-`true_label=1`), `negative_hits` (occurrences in texts with `true_label=0`),
+(total occurrences within the current run — the bank is rebuilt each cycle;
+counters do not accumulate across runs), `positive_hits` (occurrences in texts
+with `true_label=1`), `negative_hits` (occurrences in texts with
+`true_label=0`),
 `demand` (times the thesis was a rule candidate), `selected` (times the thesis
 was chosen for the prompt), `in_prompt` (boolean: whether the thesis is in the
 active prompt version), `cluster_id` (cluster identifier).
@@ -176,16 +178,18 @@ update cluster counters whenever a thesis counter is updated.
 ### Requirement: Thesis bank dump
 The component SHALL persist the thesis bank and cluster state to a JSON file
 after each update. The filename SHALL contain `run_id`, `prompt_version`, and
-`timestamp`. The artifact SHALL be loadable to resume work without recomputing
-embeddings or clusters.
+`timestamp`. The dump serializes bank and cluster entries including embeddings
+and centroids, so the state is inspectable post-hoc. The dump is not a resume
+input: each cycle rebuilds the bank from the current run's theses; the only
+cross-run carry-over is the `in_prompt` flag state.
 
 #### Scenario: Dump written
 - **WHEN** thesis analysis completes
 - **THEN** a file named `thesis_bank_{run_id}_{prompt_version}_{timestamp}.json` is written containing all bank and cluster entries
 
-#### Scenario: Dump reloaded
-- **WHEN** the artifact is loaded
-- **THEN** the thesis bank and clusters are restored to their original state
+#### Scenario: Dump inspectable
+- **WHEN** the artifact is loaded for analysis
+- **THEN** bank entries, clusters, embeddings, and centroids are available without re-running analysis
 
 ### Requirement: Normalization is already applied
 The component SHALL use `theses_norm` from the results artifact as the normalized

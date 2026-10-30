@@ -1,6 +1,6 @@
-# Configuration for the LLM server launcher and asyncTask.py client.
+# Configuration for the LLM server launcher and the AsyncTask transport client.
 # Both read this same [llm] section. The launcher uses the keys below to
-# start llama-server (or vllm); asyncTask.py reads model_path and
+# start llama-server (or vllm); the AsyncTask client reads model_path and
 # served_model_name to connect and send requests.
 
 [llm]
@@ -9,15 +9,15 @@
 # Linux GPU target.
 backend = "llamacpp"
 
-# Path to the model directory or Hugging Face repo id. asyncTask.py loads the
+# Path to the model directory or Hugging Face repo id. The AsyncTask client loads the
 # tokenizer from here (AutoTokenizer.from_pretrained). vLLM serves from here.
 model_path = "model"
 
 # Path to the GGUF file, used only by the llamacpp backend (llama-server -m).
-# Launcher-only key; asyncTask.py ignores it.
+# Launcher-only key; the AsyncTask client ignores it.
 gguf_path = "model/qwen2.5-3b-instruct-q4_k_m.gguf"
 
-# Name the server presents via GET /v1/models and that asyncTask.py sends as
+# Name the server presents via GET /v1/models and that the AsyncTask client sends as
 # the "model" field in chat payloads. For llamacpp the launcher passes this as
 # --alias so the server reports it. These two MUST match or the server rejects
 # requests with a model-name mismatch.
@@ -52,11 +52,12 @@ backend = "llama_server"
 endpoint = "http://127.0.0.1:8080"
 timeout = 30
 
-# Dataset configuration for dataset.py (loader, split, artifact persistence).
-# asyncTask.py ignores this section; it only reads [llm].
+# Dataset configuration (loader, split, artifact persistence).
+# The AsyncTask client ignores this section; it only reads [llm].
 [dataset]
 # Path to the source dataset in jsonl or parquet format.
-# Use convert_csv_to_jsonl.py to produce this from data/train.csv.
+# Use `python -m dynamic_prompt_core.interfaces.cli.convert` to produce this
+# from data/train.csv.
 path = "data/train.jsonl"
 # Fixed seed for the reproducible dev/holdout split.
 seed = 42
@@ -71,7 +72,7 @@ holdout_ratio = 0.2
 candidates = ["0", "1"]
 
 # Stage 1 baseline runner configuration (runner.py).
-# asyncTask.py and dataset.py ignore this section.
+# The AsyncTask client and dataset loader ignore this section.
 [runner]
 # Max concurrent in-flight model requests. Conservative for CPU llama-server.
 concurrency = 2
@@ -87,7 +88,7 @@ prompt_version = "classify-v0"
 dataset_artifact = "data/prepared_42_20261002T092615Z.jsonl"
 
 # Stage 1 metrics configuration (metrics.py).
-# runner.py, asyncTask.py, and dataset.py ignore this section.
+# The AsyncTask client and dataset loader ignore this section.
 [metrics]
 # Flag a prediction-distribution bias when the gap between predicted and true
 # class shares exceeds this threshold (fraction).
@@ -103,7 +104,7 @@ output_dir = "data/results"
 log_to_file = true
 
 # Stage 1 thesis analyzer configuration (thesis_analyzer.py).
-# runner.py, asyncTask.py, dataset.py, and metrics.py ignore this section.
+# The AsyncTask client, dataset loader, and metrics ignore this section.
 [thesis_analyzer]
 # Embedding model for semantic clustering of normalized theses.
 # sentence-transformers model name; downloaded from Hugging Face on first use.

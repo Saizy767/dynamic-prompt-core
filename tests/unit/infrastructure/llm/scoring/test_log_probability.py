@@ -1,4 +1,5 @@
 """Unit tests for the direct single-token log-probability function."""
+
 from __future__ import annotations
 
 import math
@@ -89,26 +90,20 @@ class TestNonFiniteRejection:
 
 
 class TestPurePythonFallback:
-    def test_fallback_matches_numpy(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_fallback_matches_numpy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         logits = [random.Random(7).uniform(-5, 5) for _ in range(20)]
         numpy_result = _log_probability(logits, 5)
         monkeypatch.setattr(ls_module, "_np", None)
         fallback_result = _log_probability(logits, 5)
         assert fallback_result == pytest.approx(numpy_result, abs=1e-9)
 
-    def test_fallback_extreme_magnitude(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_fallback_extreme_magnitude(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(ls_module, "_np", None)
         logits = [1e8, 1e8 + 1, 1e8 - 1]
         result = _log_probability(logits, 1)
         assert result == pytest.approx(_reference_log_softmax(logits, 1), abs=1e-9)
 
-    def test_fallback_empty_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_fallback_empty_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(ls_module, "_np", None)
         with pytest.raises(LLMScoringError, match="empty logit vector"):
             _log_probability([], 0)

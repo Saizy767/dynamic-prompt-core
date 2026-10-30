@@ -1,4 +1,5 @@
 """Fixed (non-optimized) prompt: classification v0."""
+
 from __future__ import annotations
 
 from dynamic_prompt_core.domain.prompts.base import (
@@ -23,9 +24,7 @@ _V0_LAYERS = PromptLayer(
         '"decision" (integer 0 or 1) and "confidence" (integer 0-100). '
         "No markdown, no extra text."
     ),
-    fallback=(
-        "If you cannot decide, return decision 0 with confidence 0."
-    ),
+    fallback=("If you cannot decide, return decision 0 with confidence 0."),
 )
 
 CLASSIFICATION_PROMPT_V0: PromptArtifact = PromptArtifact(

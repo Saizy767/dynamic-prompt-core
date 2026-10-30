@@ -29,7 +29,7 @@ import numpy as np
 from dynamic_prompt_core.application.services.metrics.metrics import (
     parse_artifact_name,
 )
-from dynamic_prompt_core.infrastructure.storage.run_repository import _atomic_write
+from dynamic_prompt_core.domain.io.atomic import atomic_write
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -239,6 +239,7 @@ def precompute_embeddings(
         return {}
     sorted_norms = sorted(norms)
     model = _get_embedding_model(model_name, device=device)
+    log.info("embedding %d unique theses (batch_size=%d)", len(sorted_norms), batch_size)
     vectors = model.encode(
         sorted_norms,
         batch_size=batch_size,
@@ -578,7 +579,7 @@ def write_dump(
     }
 
     payload = json.dumps(dump, ensure_ascii=False, indent=2)
-    _atomic_write(path, payload, _write_counter)
+    atomic_write(path, payload, _write_counter)
     return path
 
 
@@ -592,11 +593,7 @@ def carry_over_in_prompt_flags(bank: ThesisBank, previous_bank_path: str) -> int
     """
     with open(previous_bank_path, encoding="utf-8") as f:
         previous = json.load(f)
-    flagged = {
-        norm
-        for norm, entry in previous.get("theses", {}).items()
-        if entry.get("in_prompt")
-    }
+    flagged = {norm for norm, entry in previous.get("theses", {}).items() if entry.get("in_prompt")}
     count = 0
     for norm, entry in bank.theses.items():
         if norm in flagged:
@@ -686,7 +683,6 @@ def main() -> None:
     parser.add_argument("--results", required=True, help="Path to results_*.jsonl artifact")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     args = parser.parse_args()
-
 
     config = ThesisAnalyzerConfig.from_config(args.config)
     rows = load_results(args.results)

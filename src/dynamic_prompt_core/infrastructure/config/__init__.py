@@ -1,4 +1,5 @@
 """Public API for the config infrastructure package."""
+
 from __future__ import annotations
 
 from dynamic_prompt_core.infrastructure.config.loader import (

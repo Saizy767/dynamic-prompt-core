@@ -97,7 +97,7 @@ dependencies.
 ### D3: Record filtering — `classify_status=ok` only for classification metrics
 
 ```python
-ok_rows   = [r for r in rows if r["classify_status"] == "ok"]
+ok_rows = [r for r in rows if r["classify_status"] == "ok"]
 parse_counts = Counter(r["classify_status"] for r in rows)  # failed/repaired/not_attempted
 ```
 
@@ -130,10 +130,10 @@ duplicates data already present in the results artifact and adds a coupling.
 ### D5: Prediction distribution and bias — configurable threshold
 
 ```python
-pred_share  = {c: pred_counts[c] / n_pred for c in (0, 1)}
-true_share  = {c: true_counts[c] / n_true for c in (0, 1)}
-bias_gap    = max(abs(pred_share[c] - true_share[c]) for c in (0, 1))
-biased      = bias_gap > bias_threshold
+pred_share = {c: pred_counts[c] / n_pred for c in (0, 1)}
+true_share = {c: true_counts[c] / n_true for c in (0, 1)}
+bias_gap = max(abs(pred_share[c] - true_share[c]) for c in (0, 1))
+biased = bias_gap > bias_threshold
 bias_toward = 1 if pred_share[1] > true_share[1] else 0
 ```
 
@@ -149,8 +149,10 @@ without flagging mild natural variance. The config key lets the user tune it.
 
 ```python
 def length_group(word_count, short_max=10, long_min=30):
-    if word_count < short_max:   return "short"
-    if word_count <= long_min:   return "medium"
+    if word_count < short_max:
+        return "short"
+    if word_count <= long_min:
+        return "medium"
     return "long"
 ```
 
@@ -168,8 +170,11 @@ present in every result row.
 
 ```python
 {
-  "tp": int, "tn": int, "fp": int, "fn": int,
-  "matrix": [[tn, fp], [fn, tp]]   # rows=true_label, cols=predicted
+    "tp": int,
+    "tn": int,
+    "fp": int,
+    "fn": int,
+    "matrix": [[tn, fp], [fn, tp]],  # rows=true_label, cols=predicted
 }
 ```
 
@@ -185,11 +190,15 @@ for rid in common_ids:
     p0 = pred_by_id_v0[rid]
     p1 = pred_by_id_v1[rid]
     if p0 != p1:
-        correct0 = (p0 == true_by_id[rid])
-        correct1 = (p1 == true_by_id[rid])
-        direction = "fixed"  if (not correct0 and correct1) else \
-                    "broke"  if (correct0 and not correct1) else \
-                    "flip"
+        correct0 = p0 == true_by_id[rid]
+        correct1 = p1 == true_by_id[rid]
+        direction = (
+            "fixed"
+            if (not correct0 and correct1)
+            else "broke"
+            if (correct0 and not correct1)
+            else "flip"
+        )
         changed.append({"id": rid, "v0": p0, "v1": p1, "direction": direction})
 ```
 

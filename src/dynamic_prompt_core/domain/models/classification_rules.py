@@ -1,4 +1,5 @@
 """Immutable domain model for the normalized set of classification rules."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -30,7 +31,5 @@ def classification_rules_from_artifact(artifact: PromptArtifact) -> Classificati
         return ClassificationRules(rules=())
     for r in layers.rules:
         if not isinstance(r, str):
-            raise TypeError(
-                f"rule {r!r} in prompt {artifact.version!r} is not a string"
-            )
+            raise TypeError(f"rule {r!r} in prompt {artifact.version!r} is not a string")
     return ClassificationRules(rules=tuple(layers.rules))

@@ -1,4 +1,5 @@
 """Typed dependency object for the refine_theses use case."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

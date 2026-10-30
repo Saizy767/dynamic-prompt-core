@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, cast
+import tomllib
+from typing import Any
 
 from dynamic_prompt_core.application.ports.outbound.normalizer import Normalizer
 from dynamic_prompt_core.application.services.metrics import (
@@ -102,6 +103,7 @@ async def run_active_on_dev(
     runner = BaselineRunner(
         classifier=deps.classifier,
         extractor=deps.extractor,
+        dataset_repository=deps.dataset_repository,
         config=runner_config,
         split=config.dev_split,
         candidates=list(deps.candidates),
@@ -225,7 +227,7 @@ async def compose_new_version(
         base_layers,
         centroids,
         pc_config,
-        cast(Any, deps.llm_client),
+        deps.llm_client,
         active_prompt.version,
         existing_rules=existing_rules,
         version_str=version_str,
@@ -264,6 +266,7 @@ async def run_new_on_dev(
     runner = BaselineRunner(
         classifier=deps.classifier,
         extractor=deps.extractor,
+        dataset_repository=deps.dataset_repository,
         config=runner_config,
         split=config.dev_split,
         candidates=list(deps.candidates),
@@ -294,6 +297,7 @@ async def run_holdout(
     runner = BaselineRunner(
         classifier=deps.classifier,
         extractor=deps.extractor,
+        dataset_repository=deps.dataset_repository,
         config=runner_config,
         split=config.holdout_split,
         candidates=list(deps.candidates),
@@ -314,13 +318,15 @@ def _merge_refined_rows(
     refined_path: str,
     normalizer: Normalizer,
     language: str,
+    use_refined: bool = True,
 ) -> list[dict[str, Any]]:
     """Merge refined theses back into the full result rows.
 
     The refined artifact carries only ``{id, theses_raw_tiny,
     theses_refined, ...}``; the analyzer requires the full results schema
     (true_label, statuses, theses_norm).  Each row keeps every original
-    field; ``theses_raw``/``theses_norm`` are replaced by the refined theses,
+    field; ``theses_raw``/``theses_norm`` are replaced by the refined theses
+    (or the raw Tiny-model theses when ``use_refined`` is false),
     re-normalized with the same normalizer the runner used.
     """
     from dynamic_prompt_core.application.use_cases.refine_theses.refiner import (
@@ -335,7 +341,7 @@ def _merge_refined_rows(
         if rec is None:
             merged.append(row)
             continue
-        theses = list(rec["theses_refined"])
+        theses = list(rec["theses_refined"] if use_refined else rec["theses_raw_tiny"])
         merged.append(
             {
                 **row,
@@ -383,9 +389,20 @@ async def refine_theses_step(
     )
     result = await refine_theses(refine_deps, inp)
     language = RunnerConfig.from_config(config_path).language
+    use_refined = _teacher_use_refined(config_path)
     return _merge_refined_rows(
-        results_path, result.artifact_path, deps.normalizer, language
+        results_path, result.artifact_path, deps.normalizer, language, use_refined
     )
+
+
+def _teacher_use_refined(config_path: str) -> bool:
+    """Read ``[teacher].use_refined`` (default true) from config."""
+    try:
+        with open(config_path, "rb") as f:
+            t = tomllib.load(f).get("teacher", {})
+        return bool(t.get("use_refined", True))
+    except Exception:
+        return True
 
 
 # --------------------------------------------------------------------------- #
@@ -490,8 +507,7 @@ async def run_cycle_step(
 
     _hold_summary = _extract_metric_summary(metrics_holdout_active)
     log.info(
-        "cycle %d active holdout metrics: version=%s accuracy=%.4f "
-        "macro_f1=%.4f minority_f1=%.4f",
+        "cycle %d active holdout metrics: version=%s accuracy=%.4f macro_f1=%.4f minority_f1=%.4f",
         cycle_number,
         active_version_at_start,
         _hold_summary["accuracy"],
@@ -509,9 +525,7 @@ async def run_cycle_step(
     new_version = ""
 
     pc_config = PromptComposerConfig.from_config(config_path)
-    # AsyncTask exposes its tokenizer only via a private attr; the CLI does
-    # the same reach. Falls back to word count when absent (tests, mocks).
-    tokenizer = getattr(deps.llm_client, "_tokenizer", None)
+    count_tokens = deps.llm_client.count_tokens
 
     while state.candidate_queue:
         current_rule_count = len(best_prompt.layers.rules) if best_prompt.layers else 0
@@ -553,7 +567,7 @@ async def run_cycle_step(
             continue
 
         try:
-            validate_limits(new_prompt, pc_config, tokenizer)
+            validate_limits(new_prompt, pc_config, count_tokens)
         except PromptComposerError as exc:
             log.warning(
                 "candidate cluster_id=%s rejected by prompt limits: %s; skipping evaluation",
@@ -657,9 +671,7 @@ async def run_cycle_step(
             saved = deps.prompt_repository.save(
                 {
                     "text": best_prompt.text,
-                    "rules": list(best_prompt.layers.rules)
-                    if best_prompt.layers
-                    else [],
+                    "rules": list(best_prompt.layers.rules) if best_prompt.layers else [],
                     "source_candidates": accumulated_source_candidates,
                 },
                 reason="accepted",

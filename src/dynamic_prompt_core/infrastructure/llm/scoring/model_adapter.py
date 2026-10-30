@@ -6,6 +6,7 @@ padded sequences and returns ``BatchedLogits`` with semantic shape
 ``[B, S, V]``.  ``SparseLogitVector`` avoids materializing a full
 vocabulary-size logit list when only one entry's ``log_softmax`` is needed.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence

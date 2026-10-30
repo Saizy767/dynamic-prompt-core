@@ -1,4 +1,5 @@
 """Unit tests for the rule stagnation criterion."""
+
 from __future__ import annotations
 
 from dynamic_prompt_core.application.use_cases.evaluate_stop_criteria.config import (

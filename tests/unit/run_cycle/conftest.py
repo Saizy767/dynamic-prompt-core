@@ -16,6 +16,7 @@ from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.classification import Classification
 from dynamic_prompt_core.domain.models.classification_rules import ClassificationRules
 from dynamic_prompt_core.domain.models.judgment import Judgment
+from dynamic_prompt_core.infrastructure.data.writer import FileDatasetRepository
 from dynamic_prompt_core.infrastructure.llm import CallResult, ResponseStatus
 from dynamic_prompt_core.infrastructure.llm.extractor import ExtractionResult
 
@@ -27,6 +28,12 @@ class MockLLMClient:
         self, text, model, *, system_prompt="", max_tokens=512, truncate_tokens=None
     ):
         return {"theses": ["thesis one", "thesis two"]}
+
+    def count_tokens(self, text: str) -> int:
+        return len(text.split())
+
+    async def aclose(self) -> None:
+        return None
 
 
 class MockPromptRepository:
@@ -73,6 +80,12 @@ class MockRunRepository:
             for rec in results:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         self.saved.append((results, run_id, path))
+        return path
+
+    def save_artifact(self, path, payload):
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(payload)
         return path
 
     def load_results(self, path):
@@ -126,8 +139,7 @@ class FakeClassifier:
     ) -> Classification:
         cands = FAKE_CANDIDATES
         judgments = [
-            Judgment(candidate=c, score=float(len(cands) - i))
-            for i, c in enumerate(cands)
+            Judgment(candidate=c, score=float(len(cands) - i)) for i, c in enumerate(cands)
         ]
         return Classification(selected=cands[0], judgments=tuple(judgments))
 
@@ -137,7 +149,6 @@ class FakeExtractor:
 
     async def extract(
         self,
-        session: Any,
         text: str,
         true_val: int | None = None,
     ) -> ExtractionResult:
@@ -155,6 +166,9 @@ class FakeExtractor:
                 status=ResponseStatus.OK,
             ),
         )
+
+    async def aclose(self) -> None:
+        return None
 
     @staticmethod
     def skipped() -> ExtractionResult:
@@ -212,6 +226,7 @@ def build_mock_deps():
             normalizer=MockNormalizer(),
             classifier=FakeClassifier(),
             extractor=FakeExtractor(),
+            dataset_repository=FileDatasetRepository(),
             candidates=FAKE_CANDIDATES,
             teacher_llm_client=teacher,
         )

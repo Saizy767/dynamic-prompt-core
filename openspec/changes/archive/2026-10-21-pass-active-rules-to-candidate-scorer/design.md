@@ -65,8 +65,7 @@ async def score(
     text: str,
     candidates: list[Candidate],
     rules: Sequence[str],
-) -> list[Judgment]:
-    ...
+) -> list[Judgment]: ...
 ```
 
 Rules are semantic classification criteria (plain strings from
@@ -95,8 +94,7 @@ fallback case.
 The prompt builder remains stateless. `build_prefix` gains a `rules` parameter:
 
 ```python
-def build_prefix(self, text: str, rules: Sequence[str]) -> str:
-    ...
+def build_prefix(self, text: str, rules: Sequence[str]) -> str: ...
 ```
 
 The prompt structure becomes:
@@ -176,8 +174,7 @@ async def classify_input(
     text: str,
     candidates: list[Candidate],
     rules: Sequence[str],
-) -> Classification:
-    ...
+) -> Classification: ...
 ```
 
 `ClassifyInputDeps` is unchanged — it still carries only `scorer` and `policy`.

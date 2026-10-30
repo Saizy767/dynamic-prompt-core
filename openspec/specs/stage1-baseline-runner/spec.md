@@ -14,14 +14,16 @@ thesis-analysis stages.
 The runner SHALL extract classification rules from the active
 `PromptArtifact` and convert them to `ClassificationRules`. When the active
 prompt has valid `layers.rules`, the runner SHALL pass the converted
-`ClassificationRules` to the `Classifier`. When `layers` is `None` or
-`layers.rules` is an empty list, the runner SHALL set classification to `0`
-without calling the `Classifier`, and SHALL still proceed to extraction. The
-runner SHALL NOT reload the default prompt to recover rules for a non-default
-active prompt. The runner SHALL NOT parse rendered prompt text to recover rules
-when the structured `layers.rules` data is available. When rules are present but
-invalid, the runner SHALL apply the existing error-handling policy and SHALL NOT
-substitute the error with a `0` classification.
+`ClassificationRules` to the `Classifier`. When `layers` is `None`, the runner
+SHALL set classification to `0` without calling the `Classifier`, and SHALL
+still proceed to extraction. When `layers.rules` is an empty list, the runner
+SHALL pass an empty `ClassificationRules` to the `Classifier` as an honest
+zero-shot baseline. The runner SHALL NOT reload the default prompt to recover
+rules for a non-default active prompt. The runner SHALL NOT parse rendered
+prompt text to recover rules when the structured `layers.rules` data is
+available. When rules are present but invalid, the runner SHALL apply the
+existing error-handling policy and SHALL NOT substitute the error with a `0`
+classification.
 
 #### Scenario: Default prompt rules used
 - **WHEN** the runner uses the default classification prompt
@@ -35,9 +37,9 @@ substitute the error with a `0` classification.
 - **WHEN** the runner uses an active prompt with missing or `None` layers
 - **THEN** classification is set to `0` without calling the `Classifier`, and extraction proceeds
 
-#### Scenario: Empty rules list sets classification to zero
+#### Scenario: Empty rules list runs zero-shot baseline
 - **WHEN** the runner uses an active prompt with `layers.rules = []`
-- **THEN** classification is set to `0` without calling the `Classifier`, and extraction proceeds
+- **THEN** the `Classifier` is called with an empty `ClassificationRules` (zero-shot baseline), and extraction proceeds
 
 #### Scenario: No default prompt reload for non-default active prompt
 - **WHEN** the runner uses a non-default active prompt
@@ -52,8 +54,10 @@ or any generative classification method. The candidate set SHALL be supplied to
 the runner at construction time; the runner SHALL NOT infer or generate
 candidates. The runner SHALL convert the active classification rules from the
 classification prompt artifact's `layers.rules` to `ClassificationRules` and
-pass them to the `Classifier`. When rules are absent or empty, the runner SHALL
-set classification to `0` without calling the `Classifier`. Classification SHALL
+pass them to the `Classifier`. When the prompt artifact has no layers, the
+runner SHALL set classification to `0` without calling the `Classifier`; when
+the rules list is empty, the runner SHALL call the `Classifier` with an empty
+`ClassificationRules` as a zero-shot baseline. Classification SHALL
 complete before extraction begins. When `skip_extraction` is set to true, the
 component SHALL skip the `Extractor` entirely; `theses_raw` and `theses_norm`
 SHALL be empty lists and `extract_status` SHALL be `skipped`.
@@ -74,9 +78,13 @@ SHALL be empty lists and `extract_status` SHALL be `skipped`.
 - **WHEN** the runner classifies an example
 - **THEN** it invokes the `Classifier` port with `ClassificationRules` from the active prompt artifact, and does not call `CandidateScorer` or `classify_detailed`
 
-#### Scenario: Absent rules skip classifier and still extract
-- **WHEN** the runner processes an example with absent or empty rules on dev
+#### Scenario: Absent layers skip classifier and still extract
+- **WHEN** the runner processes an example with a layerless active prompt on dev
 - **THEN** classification is set to `0` without calling the `Classifier`, and the `Extractor` is called
+
+#### Scenario: Empty rules run zero-shot baseline
+- **WHEN** the runner processes an example with an empty rules list on dev
+- **THEN** the `Classifier` is called with empty `ClassificationRules`, and the `Extractor` is called after classification
 
 #### Scenario: Candidate set supplied at construction
 - **WHEN** the runner is constructed
@@ -194,9 +202,10 @@ recomputed.
 - **THEN** only examples with `split=holdout` are processed
 
 ### Requirement: Batch execution
-The component SHALL support batch execution through `AsyncTask` batch methods
-with a configurable concurrency level. The default concurrency SHALL be sane for
-local llama.cpp (no more than 8) and MAY be overridden via config.
+The component SHALL support batch execution by fanning out single-call client
+methods with `asyncio.gather` and a semaphore at a configurable concurrency
+level. The default concurrency SHALL be sane for local llama.cpp (no more than
+8) and MAY be overridden via config.
 
 #### Scenario: Concurrency honored
 - **WHEN** the runner is started with `concurrency=4`

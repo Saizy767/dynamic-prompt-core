@@ -9,6 +9,7 @@ Usage::
     LLAMA_SERVER_ENDPOINT=http://127.0.0.1:8080 \
         python -m tests.regression.bench_llama_server
 """
+
 from __future__ import annotations
 
 import asyncio

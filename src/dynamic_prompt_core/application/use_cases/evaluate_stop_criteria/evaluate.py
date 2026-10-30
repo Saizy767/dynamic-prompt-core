@@ -4,6 +4,7 @@ Evaluates seven criteria in a deterministic order and returns a continue/stop
 decision.  When the decision is ``stop``, persists a ``stop_decision`` artifact
 via ``run_repository`` and appends an event to the cycle log.
 """
+
 from __future__ import annotations
 
 import json
@@ -79,10 +80,12 @@ async def evaluate_stop_criteria(
         enabled = getattr(context.config, "enabled_criteria", None)
 
     triggered: list[str] = []
+    checked: list[str] = []
     for func in CHECK_ORDER:
         reason_name = CRITERION_REASONS.get(func.__name__, "")
         if enabled is not None and reason_name not in enabled:
             continue
+        checked.append(reason_name)
         result = func(context)
         if result is not None:
             triggered.append(result)
@@ -116,6 +119,8 @@ async def evaluate_stop_criteria(
         "stop_evaluation",
         context.round_counter,
         {
+            "checked_criteria": checked,
+            "metric_values": snapshot,
             "triggered_criteria": triggered,
             "decision": "stop" if should_stop else "continue",
             "reason": stop_reason,

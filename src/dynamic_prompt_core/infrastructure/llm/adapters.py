@@ -1,4 +1,5 @@
 """Backend adapters for building OpenAI-compatible chat payloads."""
+
 from __future__ import annotations
 
 import json
@@ -91,6 +92,7 @@ class _VLLMAdapter(_BaseAdapter):
 
 class _OpenAIAdapter(_VLLMAdapter):
     """Generic OpenAI-compatible: like vLLM, but no chat_template_kwargs."""
+
     def build_payload(self, **kw: Any) -> dict[str, Any]:
         payload = super().build_payload(**kw)
         payload.pop("chat_template_kwargs", None)

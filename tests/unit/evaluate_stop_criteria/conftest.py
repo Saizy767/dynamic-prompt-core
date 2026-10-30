@@ -1,4 +1,5 @@
 """Shared fixtures and helpers for evaluate_stop_criteria unit tests."""
+
 from __future__ import annotations
 
 from typing import Any

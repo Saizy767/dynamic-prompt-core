@@ -1,4 +1,5 @@
 """Dataset artifact persistence (write and reload prepared datasets)."""
+
 from __future__ import annotations
 
 import json
@@ -45,9 +46,7 @@ def write_artifact(
     return path
 
 
-def _artifact_row(
-    r: Record, split: str, notes: str, dataset: Dataset
-) -> dict[str, Any]:
+def _artifact_row(r: Record, split: str, notes: str, dataset: Dataset) -> dict[str, Any]:
     return {
         "id": r.id,
         "text": r.text,
@@ -63,8 +62,7 @@ def _write_parquet(rows: list[dict[str, Any]], path: str) -> None:
         import pyarrow.parquet as pq
     except ImportError as exc:
         raise DatasetError(
-            "writing parquet requires 'pyarrow'; "
-            "install with: pip install pyarrow"
+            "writing parquet requires 'pyarrow'; install with: pip install pyarrow"
         ) from exc
     table = pa.Table.from_pylist(rows)
     pq.write_table(table, path)
@@ -101,9 +99,18 @@ def load_artifact(path: str) -> Dataset:
             ambiguous.append(rec)
 
     return Dataset(
-        dev=dev, holdout=holdout, ambiguous=ambiguous,
+        dev=dev,
+        holdout=holdout,
+        ambiguous=ambiguous,
         source_path=path,
     )
+
+
+class FileDatasetRepository:
+    """Implements the DatasetRepository port via file-based artifacts."""
+
+    def load_artifact(self, path: str) -> Dataset:
+        return load_artifact(path)
 
 
 def prepare_from_config(
@@ -116,16 +123,17 @@ def prepare_from_config(
 
     cfg = DatasetConfig.from_config(config_path)
     if not cfg.path:
-        raise DatasetError(
-            "[dataset].path is not set in config.toml"
-        )
+        raise DatasetError("[dataset].path is not set in config.toml")
     records = load_dataset(cfg.path)
     dataset = split_dataset(
-        records, seed=cfg.seed, holdout_ratio=cfg.holdout_ratio,
+        records,
+        seed=cfg.seed,
+        holdout_ratio=cfg.holdout_ratio,
         source_path=cfg.path,
     )
     artifact_path = write_artifact(
-        dataset, output_dir=os.path.dirname(cfg.path) or "data",
+        dataset,
+        output_dir=os.path.dirname(cfg.path) or "data",
         notes=f"source={os.path.basename(cfg.path)} ratio={cfg.holdout_ratio}",
     )
     return dataset, artifact_path

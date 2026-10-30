@@ -21,10 +21,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-import aiohttp
-
 from dynamic_prompt_core.application.ports.outbound.classifier import Classifier
+from dynamic_prompt_core.application.ports.outbound.dataset_repository import (
+    DatasetRepository,
+)
 from dynamic_prompt_core.application.ports.outbound.extractor import Extractor
+from dynamic_prompt_core.application.use_cases.run_baseline.run_metadata import (
+    build_run_metadata,
+    load_manifest,
+    verify_resume_identity,
+    write_manifest,
+)
 from dynamic_prompt_core.domain.errors.scoring import CandidateScoringError
 from dynamic_prompt_core.domain.models.candidate import Candidate
 from dynamic_prompt_core.domain.models.classification_rules import (
@@ -35,7 +42,6 @@ from dynamic_prompt_core.domain.prompts import (
     CLASSIFICATION_PROMPT_V0,
     PromptArtifact,
 )
-from dynamic_prompt_core.infrastructure.data.writer import load_artifact
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +134,7 @@ class BaselineRunner:
         self,
         classifier: Classifier,
         extractor: Extractor,
+        dataset_repository: DatasetRepository,
         config: RunnerConfig,
         split: str,
         candidates: list[Candidate],
@@ -140,6 +147,7 @@ class BaselineRunner:
     ) -> None:
         self._classifier = classifier
         self._extractor = extractor
+        self._dataset_repository = dataset_repository
         self._candidates = candidates
         self._config = config
         self._split = split
@@ -217,14 +225,9 @@ class BaselineRunner:
 
     def _artifact_path(self) -> str:
         name = (
-            f"results_{self._run_id}_{self._prompt_version}_"
-            f"{self._split}_{self._timestamp}.jsonl"
+            f"results_{self._run_id}_{self._prompt_version}_{self._split}_{self._timestamp}.jsonl"
         )
         return os.path.join(self._results_dir(), name)
-
-    def _request_log_path(self) -> str:
-        name = f"requests_{self._run_id}_{self._split}.jsonl"
-        return os.path.join(self._log_dir(), name)
 
     def _manifest_path(self) -> str:
         name = f"manifest_{self._run_id}_{self._prompt_version}_{self._split}.json"
@@ -249,11 +252,6 @@ class BaselineRunner:
         backend_metadata = self._resolve_backend_metadata()
         if backend_metadata is None:
             return
-        from dynamic_prompt_core.infrastructure.storage.run_metadata import (
-            build_run_metadata,
-            write_manifest,
-        )
-
         prompt_sha256 = getattr(self._classify_prompt, "sha256", None)
         meta = build_run_metadata(
             run_id=self._run_id,
@@ -275,12 +273,6 @@ class BaselineRunner:
         backend_metadata = self._resolve_backend_metadata()
         if backend_metadata is None:
             return
-        from dynamic_prompt_core.infrastructure.storage.run_metadata import (
-            build_run_metadata,
-            load_manifest,
-            verify_resume_identity,
-        )
-
         recorded = load_manifest(manifest_path)
         prompt_sha256 = getattr(self._classify_prompt, "sha256", None)
         current = build_run_metadata(
@@ -353,7 +345,6 @@ class BaselineRunner:
     # -- per-example -------------------------------------------------------- #
     async def _process_example(
         self,
-        session: aiohttp.ClientSession,
         example: Record,
         index: int,
         results: list[ResultRow | None],
@@ -377,7 +368,8 @@ class BaselineRunner:
             else:
                 try:
                     classification = await self._classifier.classify(
-                        example.text, self._rules,
+                        example.text,
+                        self._rules,
                     )
                     classify_status = _RUNNER_STATUS_OK
                     selected_candidate = classification.selected.value
@@ -385,9 +377,7 @@ class BaselineRunner:
                         predicted_decision = int(classification.selected.value)
                     except (ValueError, TypeError):
                         predicted_decision = None
-                    judgment_scores = {
-                        j.candidate.value: j.score for j in classification.judgments
-                    }
+                    judgment_scores = {j.candidate.value: j.score for j in classification.judgments}
                 except CandidateScoringError as exc:
                     log.exception("classification failed for id=%s: %s", example.id, exc)
                     classify_status = _RUNNER_STATUS_FAILED
@@ -412,7 +402,8 @@ class BaselineRunner:
                 extract_result = self._extractor.skipped()
             else:
                 extract_result = await self._extractor.extract(
-                    session, example.text, true_val=example.label,
+                    example.text,
+                    true_val=example.label,
                 )
                 self._update_stats(extract_result.call_status, extract_result.status)
 
@@ -465,7 +456,7 @@ class BaselineRunner:
                 "or --dataset-artifact)"
             )
 
-        dataset = load_artifact(self._dataset_artifact)
+        dataset = self._dataset_repository.load_artifact(self._dataset_artifact)
         examples: list[Record] = getattr(dataset, self._split)
         if not examples:
             raise ValueError(f"split '{self._split}' has no examples")
@@ -502,15 +493,13 @@ class BaselineRunner:
         results: list[ResultRow | None] = [None] * len(examples)
         self._semaphore = asyncio.Semaphore(self._concurrency)
 
-        connector = aiohttp.TCPConnector(limit=self._concurrency)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            await asyncio.gather(
-                *(self._process_example(session, e, i, results) for i, e in to_run)
-            )
+        try:
+            await asyncio.gather(*(self._process_example(e, i, results) for i, e in to_run))
+        finally:
+            await self._extractor.aclose()
 
         artifact_path = self._finalize_artifact()
         self._print_summary(len(examples))
         print(f"Artifact: {artifact_path}")
-        print(f"Request log: {self._request_log_path()}")
 
         return [r for r in results if r is not None], artifact_path

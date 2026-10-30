@@ -1,4 +1,5 @@
 """Async batch LLM client for OpenAI-compatible servers."""
+
 from __future__ import annotations
 
 import asyncio
@@ -97,6 +98,7 @@ class AsyncTask:
         self._retry_jitter = retry_jitter
 
         self._log_writer = _LogWriter(log_path, run_id) if log_path else None
+        self._session: aiohttp.ClientSession | None = None
 
         with open(config_path, "rb") as f:
             self._config = tomllib.load(f)
@@ -114,18 +116,14 @@ class AsyncTask:
         if structured_mode is None:
             structured_mode = _DEFAULT_MODE[self._backend]
         self._structured_mode = (
-            StructuredMode(structured_mode)
-            if isinstance(structured_mode, str)
-            else structured_mode
+            StructuredMode(structured_mode) if isinstance(structured_mode, str) else structured_mode
         )
         self._adapter = _ADAPTERS[self._backend](self._structured_mode)
         self._chat_url = self._adapter.chat_url(self._endpoint)
 
         model_path = tokenizer_path or self._config["llm"]["model_path"]
         try:
-            self._tokenizer = AutoTokenizer.from_pretrained(
-                model_path, trust_remote_code=True
-            )
+            self._tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         except Exception as exc:
             raise RuntimeError(
                 f"Could not load tokenizer from '{model_path}'. Point "
@@ -152,9 +150,9 @@ class AsyncTask:
     # ------------------------------------------------------------------ #
     @staticmethod
     def _is_retryable(exc: BaseException, temperature: float = 0.0) -> bool:
-        if isinstance(exc, (aiohttp.ClientConnectionError,
-                            aiohttp.ServerTimeoutError,
-                            asyncio.TimeoutError)):
+        if isinstance(
+            exc, (aiohttp.ClientConnectionError, aiohttp.ServerTimeoutError, asyncio.TimeoutError)
+        ):
             return True
         if isinstance(exc, HttpError):
             # 5xx and 429 are transient; 4xx are almost always permanent.
@@ -165,15 +163,33 @@ class AsyncTask:
         return False
 
     def _backoff(self, attempt: int) -> float:
-        delay = min(self._retry_backoff_base ** attempt, self._retry_backoff_max)
+        delay = min(self._retry_backoff_base**attempt, self._retry_backoff_max)
         return delay + random.uniform(0, self._retry_jitter)
+
+    # ------------------------------------------------------------------ #
+    #  Session lifecycle
+    # ------------------------------------------------------------------ #
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        """Lazily create the shared HTTP session (connection reuse)."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP session. Safe to call repeatedly."""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in *text* with the client's tokenizer."""
+        return len(self._tokenizer.encode(text))
 
     # ------------------------------------------------------------------ #
     #  Public API — transport
     # ------------------------------------------------------------------ #
     async def analyze_raw(
         self,
-        session: aiohttp.ClientSession,
         text: str,
         model: type[T],
         *,
@@ -182,9 +198,8 @@ class AsyncTask:
         truncate_tokens: int | None = None,
         max_retries: int | None = None,
     ) -> RawResponse:
-        truncate_limit = (
-            truncate_tokens if truncate_tokens is not None else self._truncate_tokens
-        )
+        session = self._ensure_session()
+        truncate_limit = truncate_tokens if truncate_tokens is not None else self._truncate_tokens
         truncated_text, was_truncated = self._truncate(text, truncate_limit)
 
         max_attempts = max_retries if max_retries is not None else self._max_retries
@@ -196,8 +211,11 @@ class AsyncTask:
             attempt_count = attempt + 1
             try:
                 content, finish_reason, usage = await self._post_once(
-                    session, truncated_text, model,
-                    system_prompt=system_prompt, max_tokens=max_tokens,
+                    session,
+                    truncated_text,
+                    model,
+                    system_prompt=system_prompt,
+                    max_tokens=max_tokens,
                 )
                 latency_ms = (time.monotonic() - start) * 1000
                 status = ResponseStatus.OK if content else ResponseStatus.EMPTY
@@ -215,22 +233,18 @@ class AsyncTask:
                 last_exc = exc
                 if not self._is_retryable(exc, self._temperature):
                     break
-                log.warning("Attempt %d/%d failed: %s",
-                            attempt + 1, max_attempts, exc)
+                log.warning("Attempt %d/%d failed: %s", attempt + 1, max_attempts, exc)
                 if attempt + 1 < max_attempts:
                     await asyncio.sleep(self._backoff(attempt))
 
         latency_ms = (time.monotonic() - start) * 1000
-        return self._error_response(
-            last_exc, latency_ms, attempt_count, was_truncated
-        )
+        return self._error_response(last_exc, latency_ms, attempt_count, was_truncated)
 
     # ------------------------------------------------------------------ #
     #  Public API — parsing
     # ------------------------------------------------------------------ #
     async def _analyze_detailed(
         self,
-        session: aiohttp.ClientSession,
         text: str,
         model: type[T],
         *,
@@ -241,8 +255,10 @@ class AsyncTask:
         max_retries: int | None = None,
         true_val: Any | None = None,
     ) -> CallResult:
+        self._ensure_session()
         raw = await self.analyze_raw(
-            session, text, model,
+            text,
+            model,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             truncate_tokens=truncate_tokens,
@@ -267,13 +283,19 @@ class AsyncTask:
                         parse_status = ParseStatus.INVALID_JSON
                 log.debug(
                     "Parse failed (%s): %r",
-                    parse_status.value, raw.content[:500],
+                    parse_status.value,
+                    raw.content[:500],
                 )
 
         if self._log_writer:
             entry = self._build_log_entry(
-                raw, text, call_type, parse_status,
-                system_prompt, max_tokens, truncate_tokens,
+                raw,
+                text,
+                call_type,
+                parse_status,
+                system_prompt,
+                max_tokens,
+                truncate_tokens,
                 true_val=true_val,
             )
             await self._log_writer.write(entry)
@@ -291,7 +313,6 @@ class AsyncTask:
 
     async def analyze(
         self,
-        session: aiohttp.ClientSession,
         text: str,
         model: type[T],
         *,
@@ -302,7 +323,8 @@ class AsyncTask:
         max_retries: int | None = None,
     ) -> T | None:
         result = await self._analyze_detailed(
-            session, text, model,
+            text,
+            model,
             call_type=call_type,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
@@ -316,7 +338,6 @@ class AsyncTask:
     # ------------------------------------------------------------------ #
     async def extract_theses(
         self,
-        session: aiohttp.ClientSession,
         text: str,
         model: type[T],
         *,
@@ -326,7 +347,8 @@ class AsyncTask:
         **kwargs: Any,
     ) -> T | None:
         return await self.analyze(
-            session, text, model,
+            text,
+            model,
             call_type="extract_theses",
             system_prompt=system_prompt,
             max_tokens=max_tokens,
@@ -336,7 +358,6 @@ class AsyncTask:
 
     async def extract_theses_detailed(
         self,
-        session: aiohttp.ClientSession,
         text: str,
         model: type[T],
         *,
@@ -347,7 +368,8 @@ class AsyncTask:
         **kwargs: Any,
     ) -> CallResult:
         return await self._analyze_detailed(
-            session, text, model,
+            text,
+            model,
             call_type="extract_theses",
             system_prompt=system_prompt,
             max_tokens=max_tokens,
@@ -442,19 +464,13 @@ class AsyncTask:
     ) -> dict[str, Any]:
         used_sp = system_prompt if system_prompt is not None else self._system_prompt
         used_mt = max_tokens if max_tokens is not None else self._max_tokens
-        used_tt = (
-            truncate_tokens if truncate_tokens is not None else self._truncate_tokens
-        )
+        used_tt = truncate_tokens if truncate_tokens is not None else self._truncate_tokens
         return {
             "timestamp": datetime.now(UTC).isoformat(),
             "run_id": self._log_writer.run_id if self._log_writer else "smoke",
             "call_type": call_type,
-            "system_prompt_hash": hashlib.sha256(
-                used_sp.encode("utf-8")
-            ).hexdigest()[:16],
-            "text_hash": hashlib.sha256(
-                text.encode("utf-8")
-            ).hexdigest()[:16],
+            "system_prompt_hash": hashlib.sha256(used_sp.encode("utf-8")).hexdigest()[:16],
+            "text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
             "model_name": raw.model,
             "params": {
                 "temperature": self._temperature,

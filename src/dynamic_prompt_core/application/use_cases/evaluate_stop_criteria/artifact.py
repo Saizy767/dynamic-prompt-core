@@ -52,7 +52,7 @@ def write_stop_decision_artifact(
         "run_id": run_id,
         "timestamp": timestamp,
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(artifact, f, ensure_ascii=False, indent=2)
+    payload = json.dumps(artifact, ensure_ascii=False, indent=2)
+    run_repository.save_artifact(path, payload)
     log.debug("stop_decision artifact written to %s", path)
     return path

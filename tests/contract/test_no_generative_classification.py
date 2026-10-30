@@ -7,6 +7,7 @@ symbols are explicitly ALLOWED and not flagged:
   - CLASSIFICATION_PROMPT_V0 (retained as prompt versioning seed)
   - classifier.py (the new infrastructure module)
 """
+
 from __future__ import annotations
 
 import ast
@@ -21,6 +22,7 @@ FORBIDDEN_SYMBOLS = [
     "classify_detailed",
     "ClassificationResult",
     "classify_many_detailed",
+    "classify_many",
 ]
 
 FORBIDDEN_PORT_METHODS = ["classify", "classify_many"]
@@ -39,9 +41,7 @@ def test_no_production_code_references_forbidden_symbol(symbol: str) -> None:
     """No production file under src/ may reference a deleted generative symbol."""
     for py_file in _all_python_files(SRC_ROOT):
         text = _file_text(py_file)
-        assert symbol not in text, (
-            f"{py_file} references forbidden symbol '{symbol}'"
-        )
+        assert symbol not in text, f"{py_file} references forbidden symbol '{symbol}'"
 
 
 def test_llmclient_port_has_no_classify_methods() -> None:

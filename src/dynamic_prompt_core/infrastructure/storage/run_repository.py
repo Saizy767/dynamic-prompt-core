@@ -8,6 +8,9 @@ import os
 import threading
 from typing import Any
 
+from dynamic_prompt_core.domain.errors.io import AtomicWriteError
+from dynamic_prompt_core.domain.io.atomic import atomic_write
+
 
 class RunRepositoryError(ValueError):
     """Base error for run repository operations."""
@@ -28,61 +31,19 @@ class RunCorruptedError(RunRepositoryError):
 SCHEMA_VERSION = 1
 
 
-def _fsync_directory(directory: str) -> None:
-    """Best-effort fsync on the parent directory for crash durability."""
-    try:
-        dir_fd = os.open(directory, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(dir_fd)
-    except OSError:
-        pass
-    finally:
-        os.close(dir_fd)
-
-
 def _atomic_write(
     path: str, payload: str, counter: itertools.count[int], *, jsonl: bool = False
 ) -> None:
-    """Write *payload* to *path* atomically via a unique temp file.
+    """Write *payload* atomically via the shared domain helper.
 
     When *jsonl* is True, the read-back validation parses each line as a
     separate JSON document (JSONL format).  Otherwise it parses the whole
     file as a single JSON document.
     """
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    counter_val = next(counter)
-    tmp = os.path.join(
-        directory,
-        f".{os.path.basename(path)}.tmp.{os.getpid()}.{counter_val}",
-    )
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(payload)
-            f.flush()
-            os.fsync(f.fileno())
-        with open(tmp, encoding="utf-8") as vf:
-            if jsonl:
-                for line in vf:
-                    line = line.strip()
-                    if line:
-                        json.loads(line)
-            else:
-                json.load(vf)
-        os.replace(tmp, path)
-        _fsync_directory(directory)
-    except OSError as exc:
-        raise RunWriteError(f"failed to write file {path}: {exc}") from exc
-    except Exception as exc:
-        raise RunWriteError(f"failed to write file {path}: {exc}") from exc
-    finally:
-        if os.path.exists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        atomic_write(path, payload, counter, jsonl=jsonl)
+    except AtomicWriteError as exc:
+        raise RunWriteError(str(exc)) from exc
 
 
 class FileRunRepository:
@@ -100,21 +61,19 @@ class FileRunRepository:
     ) -> str:
         """Persist results as JSONL atomically. Returns the path written."""
         with self._lock:
-            directory = os.path.dirname(path) or "."
-
             for rec in results:
                 if not isinstance(rec, dict):
                     raise RunValidationError(f"result record is not a dict for run {run_id}")
                 rec.setdefault("schema_version", SCHEMA_VERSION)
 
             payload = "".join(json.dumps(rec, ensure_ascii=False) + "\n" for rec in results)
+            _atomic_write(path, payload, self._write_counter, jsonl=True)
+            return path
 
-            if payload:
-                _atomic_write(path, payload, self._write_counter, jsonl=True)
-            else:
-                os.makedirs(directory, exist_ok=True)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("")
+    def save_artifact(self, path: str, payload: str) -> str:
+        """Persist a JSON document artifact atomically. Returns the path."""
+        with self._lock:
+            _atomic_write(path, payload, self._write_counter)
             return path
 
     def load_results(self, path: str) -> list[dict[str, Any]]:

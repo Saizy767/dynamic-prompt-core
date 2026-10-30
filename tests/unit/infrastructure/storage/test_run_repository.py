@@ -230,7 +230,7 @@ class TestRegression:
 
 class TestManifestHardening:
     def test_manifest_write_and_load_round_trip(self, tmp_path: pytest.TempPathFactory) -> None:
-        from dynamic_prompt_core.infrastructure.storage.run_metadata import (
+        from dynamic_prompt_core.application.use_cases.run_baseline.run_metadata import (
             RunMetadata,
             load_manifest,
             write_manifest,
@@ -249,7 +249,7 @@ class TestManifestHardening:
     def test_failed_manifest_write_preserves_existing(
         self, tmp_path: pytest.TempPathFactory
     ) -> None:
-        from dynamic_prompt_core.infrastructure.storage.run_metadata import (
+        from dynamic_prompt_core.application.use_cases.run_baseline.run_metadata import (
             RunMetadata,
             RunMetadataError,
             load_manifest,
@@ -270,7 +270,7 @@ class TestManifestHardening:
         assert load_manifest(path).run_id == "run-1"
 
     def test_corrupted_manifest_raises_error(self, tmp_path: pytest.TempPathFactory) -> None:
-        from dynamic_prompt_core.infrastructure.storage.run_metadata import (
+        from dynamic_prompt_core.application.use_cases.run_baseline.run_metadata import (
             RunMetadataError,
             load_manifest,
         )

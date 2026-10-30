@@ -5,6 +5,7 @@ and invalid scores.  The ``LLMLogitClassifier`` translates it into the
 application-facing ``CandidateScoringError`` at the port boundary.  The
 application never imports or receives this error.
 """
+
 from __future__ import annotations
 
 

@@ -1,4 +1,5 @@
 """CSV to JSONL conversion logic for dataset preparation."""
+
 from __future__ import annotations
 
 import csv
@@ -7,8 +8,10 @@ import json
 
 def convert(input_path: str, output_path: str) -> int:
     count = 0
-    with open(input_path, encoding="utf-8", newline="") as fin, \
-         open(output_path, "w", encoding="utf-8") as fout:
+    with (
+        open(input_path, encoding="utf-8", newline="") as fin,
+        open(output_path, "w", encoding="utf-8") as fout,
+    ):
         reader = csv.DictReader(fin)
         for row in reader:
             text = (row.get("text") or "").strip()

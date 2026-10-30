@@ -4,6 +4,7 @@ Encapsulates the full classification process: rule validation, candidate
 handling, logit-based scoring, and final decision.  Returns a
 ``Classification`` directly.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -95,9 +96,7 @@ class LLMLogitClassifier:
             )
 
             prefix = self._prompt_builder.build_prefix(text, rules.rules)
-            candidate_texts = [
-                self._prompt_builder.build_candidate(c) for c in self._candidates
-            ]
+            candidate_texts = [self._prompt_builder.build_candidate(c) for c in self._candidates]
             prefixes = [prefix] * len(self._candidates)
 
             encode_fn = self._tokenizer.encode_batch
@@ -113,7 +112,9 @@ class LLMLogitClassifier:
             }
             if inspect.iscoroutinefunction(forward_fn):
                 batched_logits = await forward_fn(
-                    batch.input_ids, batch.attention_mask, **forward_kwargs,
+                    batch.input_ids,
+                    batch.attention_mask,
+                    **forward_kwargs,
                 )
             else:
                 batched_logits = await asyncio.to_thread(

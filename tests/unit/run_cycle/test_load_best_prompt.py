@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from dynamic_prompt_core.application.use_cases.run_cycle.run_cycle import (
     _load_best_prompt,
 )
-from dynamic_prompt_core.domain.prompts.fixed import CLASSIFICATION_PROMPT_V0
 
 
 def _write_prompt(path, version: str) -> None:
@@ -27,8 +28,11 @@ def test_load_best_prompt_picks_highest_version_number(tmp_path):
     assert "prompt_v10" in path
 
 
-def test_load_best_prompt_empty_dir_falls_back_to_v0(tmp_path):
-    """No artifacts means v0 with empty path."""
-    artifact, path = _load_best_prompt(str(tmp_path))
-    assert artifact.version == CLASSIFICATION_PROMPT_V0.version
-    assert path == ""
+def test_load_best_prompt_empty_dir_raises(tmp_path):
+    """No artifacts means an explicit error, not a silent v0 fallback."""
+    from dynamic_prompt_core.application.use_cases.run_cycle.report import (
+        CycleOrchestratorError,
+    )
+
+    with pytest.raises(CycleOrchestratorError):
+        _load_best_prompt(str(tmp_path))

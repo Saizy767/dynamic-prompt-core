@@ -1,4 +1,5 @@
 """Inbound port: input DTO for the run_cycle use case."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

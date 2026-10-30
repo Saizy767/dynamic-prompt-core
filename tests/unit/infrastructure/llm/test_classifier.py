@@ -1,7 +1,10 @@
 """Tests for the LLMLogitClassifier with deterministic doubles."""
+
 from __future__ import annotations
 
+import asyncio
 import math
+import threading
 
 import pytest
 
@@ -37,7 +40,9 @@ class StubTokenizer:
         return "".join(chr(tid) for tid in token_ids)
 
     def encode_batch(
-        self, prefixes: list[str], candidates: list[str],
+        self,
+        prefixes: list[str],
+        candidates: list[str],
     ) -> BatchTokenization:
         all_ids: list[list[int]] = []
         all_masks: list[list[int]] = []
@@ -57,8 +62,10 @@ class StubTokenizer:
             all_ids[i] = all_ids[i] + [0] * pad
             all_masks[i] = all_masks[i] + [0] * pad
         return BatchTokenization(
-            input_ids=all_ids, attention_mask=all_masks,
-            prefix_token_counts=all_pcounts, candidate_token_ids=all_cids,
+            input_ids=all_ids,
+            attention_mask=all_masks,
+            prefix_token_counts=all_pcounts,
+            candidate_token_ids=all_cids,
         )
 
 
@@ -79,7 +86,10 @@ class StubModel:
         self._lp = _uniform_lp()
 
     def forward_batch(
-        self, input_ids: list[list[int]], attention_mask: list[list[int]], **kw: object,
+        self,
+        input_ids: list[list[int]],
+        attention_mask: list[list[int]],
+        **kw: object,
     ) -> BatchedLogits:
         items = [
             SequenceLogits(logits=tuple(tuple(self._lp) for _ in range(len(seq))))
@@ -95,7 +105,10 @@ class StubModelWithProb:
         self._pt = prob_for_token
 
     def forward_batch(
-        self, input_ids: list[list[int]], attention_mask: list[list[int]], **kw: object,
+        self,
+        input_ids: list[list[int]],
+        attention_mask: list[list[int]],
+        **kw: object,
     ) -> BatchedLogits:
         prefix_counts = kw.get("prefix_token_counts", [])
         candidate_ids = kw.get("candidate_token_ids", [])
@@ -122,12 +135,36 @@ class StubModelWithProb:
         return BatchedLogits(items=tuple(items))
 
 
+class BlockingModel:
+    """Sync model double that blocks on a threading event until released."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self._lp = _uniform_lp()
+
+    def forward_batch(
+        self,
+        input_ids: list[list[int]],
+        attention_mask: list[list[int]],
+        **kw: object,
+    ) -> BatchedLogits:
+        self.release.wait(timeout=10.0)
+        items = [
+            SequenceLogits(logits=tuple(tuple(self._lp) for _ in range(len(seq))))
+            for seq in input_ids
+        ]
+        return BatchedLogits(items=tuple(items))
+
+
 class FailingModel:
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
     def forward_batch(
-        self, input_ids: list[list[int]], attention_mask: list[list[int]], **kw: object,
+        self,
+        input_ids: list[list[int]],
+        attention_mask: list[list[int]],
+        **kw: object,
     ) -> BatchedLogits:
         raise self._exc
 
@@ -157,6 +194,28 @@ class TestClassifierReturnsClassification:
         clf = _make_classifier(StubModel(), candidates=cands)
         result = await clf.classify("text", _RULES)
         assert [j.candidate for j in result.judgments] == cands
+
+    async def test_scoring_does_not_block_event_loop(self) -> None:
+        """A blocked sync model call must not stall the event loop.
+
+        The classifier runs the sync ``forward_batch`` via ``asyncio.to_thread``;
+        while the fake model blocks on a threading event, a concurrent asyncio
+        task must keep making progress.
+        """
+        model = BlockingModel()
+        clf = _make_classifier(model)
+
+        classify_task = asyncio.create_task(clf.classify("text", _RULES))
+        ticks = 0
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            ticks += 1
+            assert not classify_task.done(), "classify finished before release"
+        assert ticks == 20, "event loop stalled while the model call blocked"
+
+        model.release.set()
+        result = await asyncio.wait_for(classify_task, timeout=5.0)
+        assert result.selected in _CANDIDATES
 
     async def test_highest_score_selected(self) -> None:
         prob = {ord("0"): 0.1, ord("1"): 0.9}

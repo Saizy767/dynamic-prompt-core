@@ -1,4 +1,5 @@
 """Server launcher for managing inference server subprocess lifecycle."""
+
 from __future__ import annotations
 
 import logging
@@ -35,9 +36,7 @@ class ServerLauncher:
         """Spawn the server, wait for readiness, return the endpoint URL."""
         argv = build_argv(self._backend, self._cfg)
         timeout = (
-            startup_timeout
-            if startup_timeout is not None
-            else self._cfg.get("startup_timeout", 60)
+            startup_timeout if startup_timeout is not None else self._cfg.get("startup_timeout", 60)
         )
         log.info("Starting server: %s", " ".join(argv))
         self._proc = subprocess.Popen(
@@ -51,7 +50,8 @@ class ServerLauncher:
         self._reader.start()
         log.info(
             "Server PID %d, waiting for readiness (timeout=%ss)",
-            self._proc.pid, timeout,
+            self._proc.pid,
+            timeout,
         )
         if not wait_for_ready(self.endpoint, timeout):
             self.stop()
@@ -105,8 +105,10 @@ class ServerLauncher:
 
     def install_signal_handlers(self) -> None:
         """Wire SIGINT/SIGTERM to stop the server."""
+
         def _handler(signum: int, frame: Any) -> None:
             log.info("Received signal %d, stopping server", signum)
             self.stop()
+
         signal.signal(signal.SIGINT, _handler)
         signal.signal(signal.SIGTERM, _handler)

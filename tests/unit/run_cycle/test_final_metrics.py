@@ -71,9 +71,7 @@ def _run_one_cycle(build_mock_deps, tmp_path, decision: str) -> tuple[MagicMock,
     return write_summary, run_dev
 
 
-def test_accepting_cycle_measures_final_version_on_dev(
-    build_mock_deps, tmp_path
-):
+def test_accepting_cycle_measures_final_version_on_dev(build_mock_deps, tmp_path):
     """After an accepting cycle the summary must carry the final version's dev
     metrics, not the replaced version's."""
     write_summary, run_dev = _run_one_cycle(build_mock_deps, tmp_path, "accept")

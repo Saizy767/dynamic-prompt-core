@@ -15,6 +15,7 @@ from dynamic_prompt_core.application.use_cases.run_baseline.runner import (
     RunnerConfig,
 )
 from dynamic_prompt_core.domain.models.candidate import Candidate
+from dynamic_prompt_core.infrastructure.data.writer import FileDatasetRepository
 
 
 class _ClassifierWithDescribe:
@@ -35,6 +36,7 @@ def _make_extractor() -> AsyncMock:
 def _make_runner(classifier: Any, tmp_path: Path) -> BaselineRunner:
     config = RunnerConfig(output_dir=str(tmp_path))
     runner = BaselineRunner(
+        dataset_repository=FileDatasetRepository(),
         classifier=classifier,
         extractor=_make_extractor(),
         config=config,

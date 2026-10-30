@@ -1,4 +1,5 @@
 """Resource loading for file-based system prompts."""
+
 from __future__ import annotations
 
 from importlib.resources import files

@@ -56,9 +56,12 @@ The `TeacherLLMClient` port is redefined with a single `review_theses` method:
 
 ```python
 async def review_theses(
-    self, text: str, theses: list[str], *, system_prompt: str,
-) -> RefinementReview:
-    ...
+    self,
+    text: str,
+    theses: list[str],
+    *,
+    system_prompt: str,
+) -> RefinementReview: ...
 ```
 
 `RefinementReview` is a typed result (plan + latency_ms + usage) defined in the

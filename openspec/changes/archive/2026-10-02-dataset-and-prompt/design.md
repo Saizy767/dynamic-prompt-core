@@ -163,6 +163,7 @@ class ClassificationResult(BaseModel):
     decision: Literal[0, 1]
     confidence: conint(ge=0, le=100)
 
+
 class ThesisExtraction(BaseModel):
     theses: list[Annotated[str, StringConstraints(min_length=...)]]
     # 3–5 theses, each 2–6 words enforced via a field_validator

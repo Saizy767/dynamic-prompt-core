@@ -1,4 +1,5 @@
 """Configuration loader for the LLM server and client."""
+
 from __future__ import annotations
 
 import tomllib
@@ -38,8 +39,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     backend = llm["backend"]
     if backend not in VALID_BACKENDS:
         raise ConfigError(
-            f"Invalid [llm].backend {backend!r} in {path}; "
-            f"must be one of {VALID_BACKENDS}"
+            f"Invalid [llm].backend {backend!r} in {path}; must be one of {VALID_BACKENDS}"
         )
     return cast(dict[str, Any], llm)
 

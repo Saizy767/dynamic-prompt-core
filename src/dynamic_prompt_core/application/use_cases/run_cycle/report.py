@@ -1,13 +1,12 @@
 """Per-round reports, final summary, and append-only cycle log.
 
-All artifacts are written via ``run_repository`` (JSONL) or direct JSON files
-in ``output_dir``.  The module uses ``logging.getLogger(__name__)`` for runtime
+All artifacts are written via ``run_repository`` (atomic JSON writes or
+JSONL).  The module uses ``logging.getLogger(__name__)`` for runtime
 logging and never calls ``logging.basicConfig``.
 """
 
 from __future__ import annotations
 
-import itertools
 import json
 import logging
 import os
@@ -18,11 +17,8 @@ from dynamic_prompt_core.application.ports.outbound.run_repository import (
     RunRepository,
 )
 from dynamic_prompt_core.application.use_cases.run_cycle.state import CycleState
-from dynamic_prompt_core.infrastructure.storage.run_repository import _atomic_write
 
 log = logging.getLogger(__name__)
-
-_write_counter = itertools.count()
 
 VALID_STOP_REASONS = frozenset(
     {
@@ -84,7 +80,7 @@ def write_report(
         "timestamp": timestamp,
     }
     payload = json.dumps(report, ensure_ascii=False, indent=2)
-    _atomic_write(path, payload, _write_counter)
+    run_repository.save_artifact(path, payload)
     return path
 
 
@@ -128,7 +124,7 @@ def write_summary(
         "timestamp": timestamp,
     }
     payload = json.dumps(summary, ensure_ascii=False, indent=2)
-    _atomic_write(path, payload, _write_counter)
+    run_repository.save_artifact(path, payload)
     return path
 
 

@@ -1,4 +1,5 @@
 """Tests for GPU-accelerated embedding: device resolution, batch-encode, config validation."""
+
 from __future__ import annotations
 
 import sys
@@ -220,9 +221,7 @@ class TestInvalidDeviceConfig:
 
     def test_thesis_analyzer_rejects_invalid_device(self, tmp_path: Any) -> None:
         config_file = tmp_path / "config.toml"
-        config_file.write_text(
-            '[thesis_analyzer]\nembedding_device = "tpu"\n'
-        )
+        config_file.write_text('[thesis_analyzer]\nembedding_device = "tpu"\n')
         with pytest.raises(ThesisAnalyzerError, match="invalid embedding_device"):
             ThesisAnalyzerConfig.from_config(str(config_file))
 
@@ -233,8 +232,6 @@ class TestInvalidDeviceConfig:
         )
 
         config_file = tmp_path / "config.toml"
-        config_file.write_text(
-            '[prompt_composer]\nembedding_device = "tpu"\n'
-        )
+        config_file.write_text('[prompt_composer]\nembedding_device = "tpu"\n')
         with pytest.raises(PromptComposerError, match="invalid embedding_device"):
             PromptComposerConfig.from_config(str(config_file))

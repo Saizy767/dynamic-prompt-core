@@ -4,6 +4,7 @@ The composition root builds ``StopCriteriaConfig`` from the ``[stop_criteria]``
 TOML section and passes it through ``StopEvaluationContext``.  The use case
 itself never opens ``config.toml``.
 """
+
 from __future__ import annotations
 
 import tomllib
@@ -53,27 +54,17 @@ class StopCriteriaConfig:
         s = config.get("stop_criteria", {})
 
         max_tokens_raw = s.get("max_total_tokens")
-        max_total_tokens: int | None = (
-            int(max_tokens_raw) if max_tokens_raw is not None else None
-        )
+        max_total_tokens: int | None = int(max_tokens_raw) if max_tokens_raw is not None else None
 
         enabled_raw = s.get("enabled_criteria")
-        enabled_criteria: list[str] | None = (
-            list(enabled_raw) if enabled_raw is not None else None
-        )
+        enabled_criteria: list[str] | None = list(enabled_raw) if enabled_raw is not None else None
 
         return cls(
             plateau_window=int(s.get("plateau_window", DEFAULT_PLATEAU_WINDOW)),
             min_improvement=float(s.get("min_improvement", DEFAULT_MIN_IMPROVEMENT)),
-            degradation_window=int(
-                s.get("degradation_window", DEFAULT_DEGRADATION_WINDOW)
-            ),
-            stagnation_window=int(
-                s.get("stagnation_window", DEFAULT_STAGNATION_WINDOW)
-            ),
-            max_total_rounds=int(
-                s.get("max_total_rounds", DEFAULT_MAX_TOTAL_ROUNDS)
-            ),
+            degradation_window=int(s.get("degradation_window", DEFAULT_DEGRADATION_WINDOW)),
+            stagnation_window=int(s.get("stagnation_window", DEFAULT_STAGNATION_WINDOW)),
+            max_total_rounds=int(s.get("max_total_rounds", DEFAULT_MAX_TOTAL_ROUNDS)),
             max_total_tokens=max_total_tokens,
             max_consecutive_rollbacks=int(
                 s.get(

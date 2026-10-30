@@ -18,11 +18,11 @@ import logging
 import os
 import re
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-import aiohttp
 import numpy as np
 
 from dynamic_prompt_core.application.schemas import RuleFormulation
@@ -30,12 +30,12 @@ from dynamic_prompt_core.application.use_cases.analyze_theses.thesis_analyzer im
     compute_embedding,
     cosine_similarity,
 )
+from dynamic_prompt_core.domain.io.atomic import atomic_write
 from dynamic_prompt_core.domain.prompts import (
     PromptArtifact,
     PromptLayer,
     render,
 )
-from dynamic_prompt_core.infrastructure.storage.run_repository import _atomic_write
 
 log = logging.getLogger(__name__)
 
@@ -202,7 +202,6 @@ async def formulate_rule(
     candidate: dict[str, Any],
     config: PromptComposerConfig,
     async_task: Any,
-    session: aiohttp.ClientSession,
 ) -> str | None:
     """Formulate a single-sentence rule from a candidate via an LLM call.
 
@@ -211,7 +210,6 @@ async def formulate_rule(
     """
     user_message = _build_user_message(candidate)
     result = await async_task.analyze(
-        session,
         user_message,
         RuleFormulation,
         call_type="formulate_rule",
@@ -228,7 +226,6 @@ async def reformulate_rule(
     previous_rule: str,
     config: PromptComposerConfig,
     async_task: Any,
-    session: aiohttp.ClientSession,
 ) -> str | None:
     """Reformulate a rule that failed the distortion check.
 
@@ -241,7 +238,6 @@ async def reformulate_rule(
         + _REFORMULATION_INSTRUCTION
     )
     result = await async_task.analyze(
-        session,
         user_message,
         RuleFormulation,
         call_type="reformulate_rule",
@@ -388,11 +384,11 @@ def assemble_prompt(
     )
 
 
-def _count_tokens(text: str, tokenizer: Any) -> tuple[int, bool]:
+def _count_tokens(text: str, count_tokens: Callable[[str], int] | None) -> tuple[int, bool]:
     """Count tokens in text. Returns (count, used_word_fallback)."""
-    if tokenizer is not None:
+    if count_tokens is not None:
         try:
-            return len(tokenizer.encode(text)), False
+            return count_tokens(text), False
         except Exception:
             pass
     log.warning("tokenizer unavailable; falling back to word count for token limit check")
@@ -402,7 +398,7 @@ def _count_tokens(text: str, tokenizer: Any) -> tuple[int, bool]:
 def validate_limits(
     prompt_artifact: PromptArtifact,
     config: PromptComposerConfig,
-    tokenizer: Any = None,
+    count_tokens: Callable[[str], int] | None = None,
 ) -> None:
     """Validate the assembled prompt against hard limits.
 
@@ -416,7 +412,7 @@ def validate_limits(
     if rule_count > config.max_rules:
         raise PromptComposerError(f"too many rules: {rule_count} > {config.max_rules}")
 
-    token_count, _ = _count_tokens(prompt_artifact.text, tokenizer)
+    token_count, _ = _count_tokens(prompt_artifact.text, count_tokens)
     if token_count > config.max_prompt_tokens:
         raise PromptComposerError(f"prompt too long: {token_count} > {config.max_prompt_tokens}")
 
@@ -462,11 +458,11 @@ async def compose(
     rules_with_lineage: list[dict[str, Any]] = []
     rejected_rules: list[dict[str, Any]] = []
 
-    async with aiohttp.ClientSession() as session:
+    try:
         for candidate in candidates:
             cluster_id = candidate["cluster_id"]
 
-            rule = await formulate_rule(candidate, config, async_task, session)
+            rule = await formulate_rule(candidate, config, async_task)
             if rule is None or rule.strip() == "":
                 log.warning(
                     "formulation returned empty rule for cluster_id=%s; skipping",
@@ -498,7 +494,7 @@ async def compose(
                     cluster_id,
                     similarity if similarity is not None else 0.0,
                 )
-                new_rule = await reformulate_rule(candidate, rule, config, async_task, session)
+                new_rule = await reformulate_rule(candidate, rule, config, async_task)
                 if new_rule is not None and new_rule.strip() != "":
                     new_rule, _ = enforce_rule_length(new_rule, config.max_rule_words)
                     passed, similarity = check_distortion(
@@ -531,6 +527,8 @@ async def compose(
 
             accepted_rules.append(rule)
             rules_with_lineage.append({"cluster_id": cluster_id, "text": rule})
+    finally:
+        await async_task.aclose()
 
     all_rules = list(existing_rules or []) + accepted_rules
     prompt_artifact = assemble_prompt(base_layers, all_rules, base_version, version_str=version_str)
@@ -545,6 +543,15 @@ async def compose(
         "rejected_limits": rejected_limits,
         "final_rules_count": final_rules_count,
     }
+    log.info(
+        "composition: candidates_in=%d rules_formulated=%d rejected_distortion=%d "
+        "rejected_limits=%d final_rules_count=%d",
+        counters["candidates_in"],
+        counters["rules_formulated"],
+        counters["rejected_distortion"],
+        counters["rejected_limits"],
+        counters["final_rules_count"],
+    )
 
     return prompt_artifact, rules_with_lineage, counters, rejected_rules
 
@@ -598,7 +605,7 @@ def write_prompt_version(
     }
 
     payload = json.dumps(dump, ensure_ascii=False, indent=2)
-    _atomic_write(path, payload, _write_counter)
+    atomic_write(path, payload, _write_counter)
     return path
 
 

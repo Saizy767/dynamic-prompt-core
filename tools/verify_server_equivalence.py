@@ -9,6 +9,7 @@ Usage::
 
     python tools/verify_server_equivalence.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,9 +56,7 @@ async def main() -> None:
         server_scores = {j.candidate.value: j.score for j in classification.judgments}
         ref_scores = row["scores"]
 
-        deltas = {
-            c: abs(server_scores[c] - ref_scores[c]) for c in ref_scores
-        }
+        deltas = {c: abs(server_scores[c] - ref_scores[c]) for c in ref_scores}
         row_max = max(deltas.values())
         max_delta = max(max_delta, row_max)
         selected_match = classification.selected.value == row["selected"]
@@ -72,8 +71,7 @@ async def main() -> None:
             )
         else:
             print(
-                f"id={row['id']} OK max_delta={row_max:.5f} "
-                f"latency={latency:.2f}s",
+                f"id={row['id']} OK max_delta={row_max:.5f} latency={latency:.2f}s",
                 flush=True,
             )
 
